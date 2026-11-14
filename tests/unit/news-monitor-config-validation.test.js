@@ -1,6 +1,9 @@
 const {
 	parseNewsTimeoutMs,
 	parseNewsAlertThreshold,
+	parseNewsMaxAlertsPerBatch,
+	parseNewsMaxAlertsPerWindow,
+	parseNewsMaxAlertsPerWindowMs,
 	NewsAnalyzer,
 } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
 const {
@@ -209,6 +212,32 @@ describe('News Monitor Configuration Validation', () => {
 			const analyzer = new NewsAnalyzer();
 			expect(analyzer.timeout).toBe(12000);
 			expect(analyzer.alertThreshold).toBe(0.85);
+		});
+	});
+
+	describe('Volume throttling configuration validation', () => {
+		it('should validate NEWS_MAX_ALERTS_PER_BATCH bounds and fallback', () => {
+			expect(parseNewsMaxAlertsPerBatch('15')).toBe(15);
+			expect(parseNewsMaxAlertsPerBatch(undefined)).toBe(10);
+			expect(parseNewsMaxAlertsPerBatch('0')).toBe(10);
+			expect(parseNewsMaxAlertsPerBatch('51')).toBe(10);
+			expect(parseNewsMaxAlertsPerBatch('invalid')).toBe(10);
+		});
+
+		it('should validate NEWS_MAX_ALERTS_PER_WINDOW bounds and fallback', () => {
+			expect(parseNewsMaxAlertsPerWindow('50')).toBe(50);
+			expect(parseNewsMaxAlertsPerWindow(undefined)).toBe(20);
+			expect(parseNewsMaxAlertsPerWindow('0')).toBe(20);
+			expect(parseNewsMaxAlertsPerWindow('201')).toBe(20);
+			expect(parseNewsMaxAlertsPerWindow('invalid')).toBe(20);
+		});
+
+		it('should validate NEWS_MAX_ALERTS_PER_WINDOW_MS bounds and fallback', () => {
+			expect(parseNewsMaxAlertsPerWindowMs('600000')).toBe(600000);
+			expect(parseNewsMaxAlertsPerWindowMs(undefined)).toBe(300000);
+			expect(parseNewsMaxAlertsPerWindowMs('999')).toBe(300000);
+			expect(parseNewsMaxAlertsPerWindowMs('3600001')).toBe(300000);
+			expect(parseNewsMaxAlertsPerWindowMs('invalid')).toBe(300000);
 		});
 	});
 });

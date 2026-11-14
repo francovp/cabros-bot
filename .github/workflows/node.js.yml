@@ -26,33 +26,43 @@ jobs:
     timeout-minutes: 30
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - name: Validate agent skills
+      run: bash .agents/skills/cabros-skill-optimizer/scripts/test-skills-e2e.sh --all
     - name: Install pnpm
-      uses: pnpm/action-setup@v3
-      with:
-        version: 10 # Compatible with the pinned Node.js 24 runtime
+      uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
     - name: Setup Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
       with:
         node-version-file: .node-version
         cache: pnpm
     - run: pnpm install --frozen-lockfile
+    - name: Verify admin hosting assets are in sync with source
+      run: pnpm run check:admin-drift
     - name: Setup Java for Firebase Firestore emulator
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
       with:
         distribution: temurin
         java-version: '21'
     - name: Cache Firebase emulator binaries
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: ~/.cache/firebase/emulators
-        key: firebase-tools-15.25.1-${{ runner.os }}
+        # Keyed on the pinned firebase-tools version: the emulator binary is that
+        # version's, so bumping the dep must miss the cache (#872 bumped to 15.32.1).
+        key: firebase-tools-15.32.1-${{ runner.os }}
     # ESLint gate. Currently the tree has ~800 pre-existing findings from the
     # deferred-cleanup convention, so the step is non-blocking with a fast-follow
     # plan to flip `continue-on-error` once the codebase is lint-clean (#565).
     - name: Lint
       run: pnpm run lint
       continue-on-error: true
+    # Dependency advisory gate (#872). This queries the npm registry, so it is a
+    # separate CI step rather than part of `pnpm test`, which must stay runnable
+    # offline. `--ignore-registry-errors` inside the script keeps a registry
+    # outage from being reported as a vulnerable tree.
+    - name: Dependency advisory gate
+      run: pnpm run audit:gate
     - name: Run Firestore emulator integration tests
       run: pnpm test:firebase
     # - run: pnpm run build --if-present # No build step needed for this project, yet.

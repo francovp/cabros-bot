@@ -149,6 +149,44 @@ function scoreScannerItem(item, scanType, options = {}) {
 		volatilityScore = 5; // Neutral for non-BB scans
 	}
 
+	// --- Persistence / Pattern strength for consecutive candles (0-15) ---
+	let persistenceScore = 0;
+	if (scanType === 'consecutive_candles_scan') {
+		const patternStrength = numberOrNull(item.pattern_strength);
+		const candleBodyRatio = numberOrNull(item.candle_body_ratio);
+		if (patternStrength !== null) {
+			const normalizedStrength = patternStrength <= 1 ? patternStrength : patternStrength / 100;
+			persistenceScore += Math.min(10, Math.round(normalizedStrength * 10));
+		}
+		if (candleBodyRatio !== null) {
+			persistenceScore += Math.min(5, Math.round(candleBodyRatio * 5));
+		}
+	}
+
+	// --- Bollinger Band Rating adjustment (-10 to +10) ---
+	const bbRating = numberOrNull(item.bollinger_rating ?? item.rating);
+	let bbRatingAdjustment = 0;
+	if (bbRating !== null) {
+		const isBearishSetup = scanType === 'top_losers'
+			|| (scanType === 'consecutive_candles_scan' && normalizeTrendDirection(item.pattern_type) === 'bearish')
+			|| (scanType === 'rating_filter' && bbRating < 0);
+		const isBullishSetup = scanType === 'top_gainers'
+			|| (scanType === 'consecutive_candles_scan' && normalizeTrendDirection(item.pattern_type) === 'bullish')
+			|| (scanType === 'rating_filter' && bbRating > 0);
+
+		if (isBullishSetup && bbRating > 0) {
+			bbRatingAdjustment = Math.min(10, Math.round((bbRating / 3) * 10));
+		} else if (isBearishSetup && bbRating < 0) {
+			bbRatingAdjustment = Math.min(10, Math.round((Math.abs(bbRating) / 3) * 10));
+		} else if (isBullishSetup && bbRating < 0) {
+			bbRatingAdjustment = -Math.min(10, Math.round((Math.abs(bbRating) / 3) * 10));
+		} else if (isBearishSetup && bbRating > 0) {
+			bbRatingAdjustment = -Math.min(10, Math.round((bbRating / 3) * 10));
+		} else {
+			bbRatingAdjustment = Math.round((Math.abs(bbRating) / 3) * 5);
+		}
+	}
+
 	// --- Chase-entry penalty ---
 	let chasePenalty = 0;
 	if (rsi !== null && volRatio !== null) {
@@ -176,7 +214,7 @@ function scoreScannerItem(item, scanType, options = {}) {
 	}
 
 	// --- Composite score (0-100) ---
-	const rawScore = trendScore + momentumScore + volumeScore + breakoutScore + volatilityScore + trendConfluenceAdjustment;
+	const rawScore = trendScore + momentumScore + volumeScore + breakoutScore + volatilityScore + persistenceScore + bbRatingAdjustment + trendConfluenceAdjustment;
 	const finalScore = Math.max(0, Math.min(100, rawScore - chasePenalty));
 
 	// --- Reason text ---
@@ -189,6 +227,20 @@ function scoreScannerItem(item, scanType, options = {}) {
 	}
 	if (volRatio !== null) {
 		parts.push(`Vol ${volRatio.toFixed(1)}x`);
+	}
+	if (bbRating !== null) {
+		const sign = bbRating > 0 ? '+' : '';
+		parts.push(`BB rating ${sign}${bbRating}`);
+	}
+	if (scanType === 'consecutive_candles_scan') {
+		const patternStrength = numberOrNull(item.pattern_strength);
+		const candleBodyRatio = numberOrNull(item.candle_body_ratio);
+		if (patternStrength !== null) {
+			parts.push(`strength ${patternStrength}`);
+		}
+		if (candleBodyRatio !== null) {
+			parts.push(`body ${candleBodyRatio}`);
+		}
 	}
 	if (chasePenalty > 0) {
 		parts.push(`⚠️ chase penalty -${chasePenalty}`);
@@ -208,8 +260,148 @@ function scoreScannerItem(item, scanType, options = {}) {
 	if (trendConfluence) {
 		result.trendConfluence = trendConfluence;
 	}
+	const positionSizing = computePositionSizing(item, options);
+	if (positionSizing) {
+		result.positionSizing = positionSizing;
+	}
 
 	return result;
+}
+
+/**
+ * Default ATR multiplier for stop distance. The position sizing hint sets the
+ * stop at `atrMultiplier * ATR` away from entry; the default of 2.0 reflects a
+ * common intraday setup where the stop is twice the average true range.
+ */
+const DEFAULT_ATR_MULTIPLIER = 2.0;
+
+/**
+ * Default account risk percentage per trade (1% by default). Position size is
+ * derived as `(accountRiskPct / suggestedStopPct) * 100` because both inputs
+ * are percentages. The result is capped at 100% of capital (no leverage).
+ */
+const DEFAULT_ACCOUNT_RISK_PCT = 1.0;
+
+/**
+ * Compute volatility-adjusted position sizing hints from MCP indicators.
+ *
+ * Returns null when the inputs are insufficient (no ATR or no positive price)
+ * so the caller can fall through to the regular scanner output without
+ * breaking scoring, persistence, or report rendering. A rejected or missing
+ * ATR never crashes the pipeline.
+ *
+ * The returned object intentionally exposes raw numeric values (rounded) so
+ * downstream report renderers and the `/api/webhook/market-scanner-alert`
+ * response can format them with their own locale; only the derived
+ * `suggestedPositionPct` is rounded to two decimals because it is the only
+ * percentage the report formats inline.
+ *
+ * @param {Object} item - Scanner item from MCP result
+ * @param {Object} [options] - Optional position-sizing options
+ * @param {number} [options.atrMultiplier] - Stop distance in multiples of ATR
+ * @param {number} [options.accountRiskPct] - Account risk percentage per trade
+ * @returns {null | { atr: number, atrPercent: number, suggestedStopPct: number, suggestedPositionPct: number, minRiskRewardRatio: number|null }}
+ */
+function computePositionSizing(item = {}, options = {}) {
+	const atrMultiplier = numberOrNull(options.atrMultiplier);
+	const accountRiskPct = numberOrNull(options.accountRiskPct);
+
+	const atr = resolveAtr(item);
+	const price = resolvePrice(item);
+
+	if (atr === null || atr <= 0 || price === null || price <= 0) {
+		return null;
+	}
+
+	const atrPercent = (atr / price) * 100;
+	if (!Number.isFinite(atrPercent) || atrPercent <= 0) {
+		return null;
+	}
+
+	const effectiveAtrMultiplier = (atrMultiplier === null || atrMultiplier <= 0)
+		? DEFAULT_ATR_MULTIPLIER
+		: atrMultiplier;
+	const suggestedStopPct = atrPercent * effectiveAtrMultiplier;
+	// A spot/long ATR stop at 100% or more would be at or below zero.
+	if (!Number.isFinite(suggestedStopPct) || suggestedStopPct >= 100) {
+		return null;
+	}
+
+	const effectiveAccountRiskPct = (accountRiskPct === null || accountRiskPct <= 0)
+		? DEFAULT_ACCOUNT_RISK_PCT
+		: accountRiskPct;
+	const uncappedPositionPct = (effectiveAccountRiskPct / suggestedStopPct) * 100;
+	const suggestedPositionPct = Math.min(100, uncappedPositionPct);
+
+	const minRiskRewardRatio = resolveMinRiskRewardRatio(item);
+
+	return {
+		atr: roundTo(atr, 6),
+		atrPercent: roundTo(atrPercent, 4),
+		suggestedStopPct: roundTo(suggestedStopPct, 4),
+		suggestedPositionPct: Number.isFinite(suggestedPositionPct) && suggestedPositionPct > 0
+			? roundTo(suggestedPositionPct, 2)
+			: null,
+		minRiskRewardRatio: minRiskRewardRatio === null
+			? null
+			: roundTo(minRiskRewardRatio, 2),
+	};
+}
+
+function resolveAtr(item = {}) {
+	const candidates = [
+		item.indicators?.atr,
+		item.indicators?.ATR,
+		item.atr,
+		item.ATR,
+	];
+	for (const candidate of candidates) {
+		const numeric = numberOrNull(candidate);
+		if (numeric !== null && numeric > 0) {
+			return numeric;
+		}
+	}
+	return null;
+}
+
+function resolvePrice(item = {}) {
+	const candidates = [
+		item.indicators?.close,
+		item.close,
+		item.price,
+		item.indicators?.price,
+	];
+	for (const candidate of candidates) {
+		const numeric = numberOrNull(candidate);
+		if (numeric !== null && numeric > 0) {
+			return numeric;
+		}
+	}
+	return null;
+}
+
+function resolveMinRiskRewardRatio(item = {}) {
+	const candidates = [
+		item.minRiskRewardRatio,
+		item.min_risk_reward_ratio,
+		item.riskRewardRatio,
+		item.indicators?.riskRewardRatio,
+	];
+	for (const candidate of candidates) {
+		const numeric = numberOrNull(candidate);
+		if (numeric !== null && numeric > 0) {
+			return numeric;
+		}
+	}
+	return null;
+}
+
+function roundTo(value, decimals) {
+	if (!Number.isFinite(value)) {
+		return null;
+	}
+	const factor = 10 ** decimals;
+	return Math.round(value * factor) / factor;
 }
 
 /**
@@ -226,12 +418,13 @@ function rankScannerItems(items, scanType, options = {}) {
 	}
 
 	const scored = items.map((item) => {
-		const { score, reason, trendConfluence } = scoreScannerItem(item, scanType, options);
+		const { score, reason, trendConfluence, positionSizing } = scoreScannerItem(item, scanType, options);
 		return {
 			...item,
 			_score: score,
 			_scoreReason: reason,
 			...(trendConfluence ? { _trendConfluence: trendConfluence } : {}),
+			...(positionSizing ? { _positionSizing: positionSizing } : {}),
 		};
 	});
 
@@ -239,6 +432,8 @@ function rankScannerItems(items, scanType, options = {}) {
 }
 
 function numberOrNull(value) {
+	if (typeof value !== 'number' && typeof value !== 'string') return null;
+	if (typeof value === 'string' && value.trim() === '') return null;
 	const number = Number(value);
 	return Number.isFinite(number) ? number : null;
 }
@@ -257,20 +452,22 @@ function resolveTrendConfluence(item = {}, scanType, options = {}) {
 	const direction = resolveDirectionFromRaw(raw);
 	const expectedDirection = getExpectedTrendDirection(item, scanType);
 
+	const isDirectionlessScan = scanType === 'bollinger_scan' || scanType === 'volume_confirmation';
+
 	let status = explicitStatus;
 	if (direction && expectedDirection) {
 		status = direction === expectedDirection ? 'aligned' : 'counter-trend';
-	} else if (scanType === 'bollinger_scan' && direction) {
+	} else if (isDirectionlessScan && direction) {
 		status = 'aligned';
 	} else if (!status && typeof raw.aligned === 'boolean') {
 		status = raw.aligned ? 'aligned' : 'counter-trend';
 	} else if (!status && direction) {
 		status = 'unknown';
 	}
-	if (!expectedDirection && scanType !== 'bollinger_scan' && (status === 'aligned' || status === 'counter-trend')) {
+	if (!expectedDirection && !isDirectionlessScan && (status === 'aligned' || status === 'counter-trend')) {
 		status = 'unknown';
 	}
-	if (!expectedDirection && scanType === 'bollinger_scan' && !direction && (status === 'aligned' || status === 'counter-trend')) {
+	if (!expectedDirection && isDirectionlessScan && !direction && (status === 'aligned' || status === 'counter-trend')) {
 		status = 'unknown';
 	}
 	if (!status) {
@@ -336,6 +533,20 @@ function getExpectedTrendDirection(item = {}, scanType) {
 	}
 	if (scanType === 'top_losers') {
 		return 'bearish';
+	}
+
+	if (scanType === 'rating_filter') {
+		const bbRating = numberOrNull(item.bollinger_rating ?? item.rating);
+		if (bbRating !== null) {
+			return bbRating >= 0 ? 'bullish' : 'bearish';
+		}
+	}
+
+	if (scanType === 'consecutive_candles_scan' || item.pattern_type) {
+		const patternDir = normalizeTrendDirection(item.pattern_type);
+		if (patternDir) {
+			return patternDir;
+		}
 	}
 
 	const breakoutDirection = normalizeTrendDirection(item.breakout_type);
@@ -419,6 +630,10 @@ module.exports = {
 	scoreScannerItem,
 	rankScannerItems,
 	resolveTrendConfluence,
+	computePositionSizing,
+	DEFAULT_ATR_MULTIPLIER,
+	DEFAULT_ACCOUNT_RISK_PCT,
 	normalizeTrendDirection,
 	normalizeConfluenceStatus,
+	numberOrNull,
 };

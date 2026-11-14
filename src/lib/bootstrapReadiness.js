@@ -1,6 +1,29 @@
 const DEFAULT_TIMEOUT_MS = 60000;
 const COMPONENTS = ['telegramBot', 'notificationServices', 'newsMonitor'];
 
+// Public surfaces (`GET /ready`) are unauthenticated, so bootstrap failures
+// are exposed as stable machine codes only; raw provider error text (which
+// can embed credentials or Telegram descriptions) stays server-side (#1296).
+function toStableErrorCode(error) {
+	const message = error instanceof Error ? error.message : String(error || 'Bootstrap failed');
+	if (/getUpdates|terminated by other|\b409\b/.test(message)) {
+		return 'TELEGRAM_POLLING_CONFLICT';
+	}
+	if (/did not complete within/i.test(message)) {
+		return 'BOOTSTRAP_TIMEOUT';
+	}
+	if (/^\s*(telegram|telegraf|bot_token)/i.test(message)
+		|| /failed to launch telegram/i.test(message)
+		|| /_launch failed$/i.test(message)
+		|| /launch failed$/i.test(message)) {
+		return 'TELEGRAM_BOOTSTRAP_FAILED';
+	}
+	if (/polling/i.test(message) && /telegram|bot/i.test(message)) {
+		return 'TELEGRAM_BOOTSTRAP_FAILED';
+	}
+	return 'BOOTSTRAP_FAILED';
+}
+
 let timeoutId;
 let state = createState();
 
@@ -11,7 +34,7 @@ function createState() {
 		startedAt: null,
 		completedAt: null,
 		failedAt: null,
-		error: null,
+		errorCode: null,
 		components: Object.fromEntries(COMPONENTS.map((name) => [name, { status: 'pending' }])),
 	};
 }
@@ -65,7 +88,8 @@ function fail(error) {
 	state.status = 'failed';
 	state.ready = false;
 	state.failedAt = new Date().toISOString();
-	state.error = error instanceof Error ? error.message : String(error || 'Bootstrap failed');
+	state.errorCode = toStableErrorCode(error);
+	console.error('[bootstrap] failed:', error instanceof Error ? error.message : String(error || 'Bootstrap failed'));
 	clearTimeoutIfSet();
 	return getStatus();
 }
@@ -88,4 +112,5 @@ module.exports = {
 	fail,
 	reset,
 	getStatus,
+	toStableErrorCode,
 };

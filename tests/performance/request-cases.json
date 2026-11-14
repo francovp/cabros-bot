@@ -1,0 +1,46 @@
+[
+	{
+		"name": "alert",
+		"budgetPath": "/api/webhook/alert",
+		"path": "/api/webhook/alert?dryRun=true&useTradingViewData=true",
+		"body": { "text": "BTCUSDT(240) señal de COMPRA" },
+		"expectedStatus": 200,
+		"expectedBody": { "success": true, "dryRun": true }
+	},
+	{
+		"name": "expanded-analysis",
+		"budgetPath": "/api/webhook/expanded-analysis-alert",
+		"path": "/api/webhook/expanded-analysis-alert?dryRun=true",
+		"body": { "symbols": ["BINANCE:BTCUSDT"], "timeframe": "1D" },
+		"expectedStatus": 200,
+		"expectedBody": { "success": true, "dryRun": true },
+		"expectedBodyPaths": { "results.0.status": "analyzed" }
+	},
+	{
+		"name": "market-scanner",
+		"budgetPath": "/api/webhook/market-scanner-alert",
+		"path": "/api/webhook/market-scanner-alert?dryRun=true",
+		"body": { "scans": ["top_gainers"], "dryRun": true },
+		"expectedStatus": 200,
+		"expectedBody": { "success": true, "ranked": false },
+		"expectedBodyPaths": { "scanResults.0.status": "success" }
+	},
+	{
+		"name": "jobs",
+		"budgetPath": "/api/jobs/tradingview-analysis",
+		"path": "/api/jobs/tradingview-analysis",
+		"body": { "type": "expanded-analysis", "symbols": ["BINANCE:BTCUSDT"], "timeframe": "1D" },
+		"expectedStatus": 201,
+		"expectedBody": { "success": true },
+		"expectedStringPaths": ["jobId"]
+	},
+	{
+		"name": "news-monitor",
+		"budgetPath": "/api/news-monitor",
+		"path": "/api/news-monitor?dryRun=true",
+		"body": { "crypto": ["BTCUSDT"], "dryRun": true },
+		"expectedStatus": 200,
+		"expectedBody": { "success": true, "dryRun": true },
+		"expectedBodyPaths": { "results.0.status": "analyzed" }
+	}
+]

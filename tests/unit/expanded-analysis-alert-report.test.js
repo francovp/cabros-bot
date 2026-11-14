@@ -2,7 +2,12 @@ const {
 	parseExpandedAnalysisAlertRequest,
 	buildExpandedAnalysisAlertReport,
 	buildReportRow,
+	deriveItemSide,
+	recordExpandedAnalysisOutcomes,
+	selectTakeProfitWithMinRatio,
+	getRiskRewardRatio,
 } = require('../../src/services/tradingview/expandedAnalysisAlertReport');
+const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 
 describe('Expanded Analysis Alert report', () => {
 	const originalEnv = process.env;
@@ -33,6 +38,7 @@ describe('Expanded Analysis Alert report', () => {
 			timeframe: '1D',
 			includeMultiTimeframe: false,
 			analysisMode: 'standard',
+			duplicatesRemoved: 0,
 		});
 	});
 
@@ -329,6 +335,134 @@ describe('Expanded Analysis Alert report', () => {
 		expect(report).not.toContain('Risk/Reward');
 	});
 
+	describe('symbol deduplication (#874)', () => {
+		beforeEach(() => {
+			process.env = {
+				...originalEnv,
+				EXPANDED_ANALYSIS_ALERT_SYMBOLS: '',
+				TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: '1D',
+			};
+		});
+
+		it('collapses exact duplicates and reports how many were removed', () => {
+			const parsed = parseExpandedAnalysisAlertRequest({
+				body: { symbols: ['BINANCE:BTCUSDT', 'BINANCE:BTCUSDT', 'NASDAQ:NVDA'] },
+			});
+
+			expect(parsed.symbols).toEqual([
+				{ raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+				{ raw: 'NASDAQ:NVDA', exchange: 'NASDAQ', symbol: 'NVDA' },
+			]);
+			expect(parsed.duplicatesRemoved).toBe(1);
+		});
+
+		it('is case-insensitive and whitespace-tolerant', () => {
+			const parsed = parseExpandedAnalysisAlertRequest({
+				body: { symbols: ['binance:btcusdt', ' BINANCE:BTCUSDT ', 'Binance:Btcusdt'] },
+			});
+
+			expect(parsed.symbols).toEqual([
+				{ raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+			]);
+			expect(parsed.duplicatesRemoved).toBe(2);
+		});
+
+		it('collapses probe-verified exchange aliases that resolve to the same MCP venue', () => {
+			const parsed = parseExpandedAnalysisAlertRequest({
+				body: { symbols: ['BATS:AAPL', 'NASDAQ:AAPL', 'NASDAQ_DLY:AAPL', 'NASDAQ:MSFT'] },
+			});
+
+			expect(parsed.symbols).toEqual([
+				{ raw: 'BATS:AAPL', exchange: 'BATS', symbol: 'AAPL' },
+				{ raw: 'NASDAQ:MSFT', exchange: 'NASDAQ', symbol: 'MSFT' },
+			]);
+			expect(parsed.duplicatesRemoved).toBe(2);
+		});
+
+		it('keeps the first occurrence and preserves first-occurrence order', () => {
+			const parsed = parseExpandedAnalysisAlertRequest({
+				body: { symbols: ['NASDAQ:MSFT', 'BATS:AAPL', 'NASDAQ:MSFT', 'BINANCE:BTCUSDT', 'BATS:AAPL'] },
+			});
+
+			expect(parsed.symbols.map((entry) => entry.raw)).toEqual([
+				'NASDAQ:MSFT',
+				'BATS:AAPL',
+				'BINANCE:BTCUSDT',
+			]);
+			expect(parsed.duplicatesRemoved).toBe(2);
+		});
+
+		it('keeps distinct venues distinct even when the symbol is identical', () => {
+			const parsed = parseExpandedAnalysisAlertRequest({
+				body: { symbols: ['NASDAQ:ABC', 'NYSE:ABC', 'FX_IDC:ABC'] },
+			});
+
+			expect(parsed.symbols.map((entry) => entry.raw)).toEqual([
+				'NASDAQ:ABC',
+				'NYSE:ABC',
+				'FX_IDC:ABC',
+			]);
+			expect(parsed.duplicatesRemoved).toBe(0);
+		});
+
+		it('applies the MAX_SYMBOLS cap to the deduplicated list', () => {
+			const duplicate = 'BINANCE:BTCUSDT';
+			// 51 distinct markets plus 60 copies of one of them: the raw list is far
+			// over the cap, the deduplicated list is one market over it.
+			const symbols = [
+				...Array.from({ length: 60 }, () => duplicate),
+				...Array.from({ length: 50 }, (_, index) => `NASDAQ:SYM${index}`),
+			];
+
+			expect(() => parseExpandedAnalysisAlertRequest({ body: { symbols } }))
+				.toThrow('Too many symbols requested (max: 50)');
+
+			const withinCap = parseExpandedAnalysisAlertRequest({
+				body: { symbols: [...Array.from({ length: 60 }, () => duplicate), 'NASDAQ:NVDA'] },
+			});
+
+			expect(withinCap.symbols).toEqual([
+				{ raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+				{ raw: 'NASDAQ:NVDA', exchange: 'NASDAQ', symbol: 'NVDA' },
+			]);
+			expect(withinCap.duplicatesRemoved).toBe(59);
+		});
+
+		it('deduplicates the EXPANDED_ANALYSIS_ALERT_SYMBOLS env fallback too', () => {
+			process.env = {
+				...originalEnv,
+				EXPANDED_ANALYSIS_ALERT_SYMBOLS: 'BINANCE:BTCUSDT, binance:btcusdt ,NASDAQ:NVDA',
+				TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: '1D',
+			};
+
+			const parsed = parseExpandedAnalysisAlertRequest({ body: {} });
+
+			expect(parsed.symbols.map((entry) => entry.raw)).toEqual([
+				'BINANCE:BTCUSDT',
+				'NASDAQ:NVDA',
+			]);
+			expect(parsed.duplicatesRemoved).toBe(1);
+		});
+
+		it('is idempotent, so a re-parse of already deduplicated metadata removes nothing', () => {
+			const first = parseExpandedAnalysisAlertRequest({
+				body: { symbols: ['BATS:AAPL', 'NASDAQ:AAPL', 'BINANCE:BTCUSDT'] },
+			});
+			const second = parseExpandedAnalysisAlertRequest({
+				body: { symbols: first.symbols.map((entry) => entry.raw) },
+			});
+
+			expect(second.symbols).toEqual(first.symbols);
+			expect(second.duplicatesRemoved).toBe(0);
+		});
+
+		it('still rejects an entirely invalid symbol list before deduplication runs', () => {
+			expect(() => parseExpandedAnalysisAlertRequest({
+				body: { symbols: ['NVDA', 'NVDA'] },
+			})).toThrow('Symbol must use EXCHANGE:SYMBOL format: NVDA');
+		});
+	});
+
 	describe('includeMultiTimeframe updates', () => {
 		it('parses includeMultiTimeframe and include_multi_timeframe correctly', () => {
 			const parsed1 = parseExpandedAnalysisAlertRequest({
@@ -473,6 +607,27 @@ describe('Expanded Analysis Alert report', () => {
 			expect(report).toContain('  • Bitcoin surges past 68k (CoinDesk)');
 			expect(report).toContain('  • Crypto market gains momentum (bloomberg.com)');
 		});
+
+		it('omits confluence when external evidence is empty', () => {
+			const report = buildExpandedAnalysisAlertReport([
+				{
+					input: { raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+					analysis: {
+						technical: { price_data: { current_price: 68000 } },
+						confluence: {
+							recommendation: 'STRONG BUY',
+							confidence: 'high',
+							signals_agree: true,
+						},
+						news: { count: 0, latest: [] },
+						sentiment: { posts_analyzed: 0 },
+					},
+				},
+			], { now: new Date('2026-05-22T12:00:00Z') });
+
+			expect(report).not.toContain('*Confluencia:*');
+			expect(report).not.toContain('Confianza: high');
+		});
 	});
 
 	describe('side-aware risk barriers', () => {
@@ -534,6 +689,272 @@ describe('Expanded Analysis Alert report', () => {
 			expect(report).toContain('- *Stop Loss sugerido:* $106.00');
 			expect(report).toContain('- *Target sugerido:* $88.00');
 			expect(report).toContain('- *Invalidación:* $6.00 por encima del precio actual');
+		});
+	});
+
+	describe('deriveItemSide', () => {
+		it('ignores SELL confluence without external evidence', () => {
+			expect(deriveItemSide({ confluence: { recommendation: 'STRONG_SELL' }, news: { count: 0 } })).toBe('BUY');
+		});
+		it('derives SELL for bearish sentiment or sell recommendation', () => {
+			expect(deriveItemSide({ sentiment: 'bearish' })).toBe('SELL');
+			expect(deriveItemSide({ market_sentiment: { overall_sentiment: 'Bajista' } })).toBe('SELL');
+			expect(deriveItemSide({ confluence: { recommendation: 'STRONG_SELL' }, news: { count: 1 } })).toBe('SELL');
+			expect(deriveItemSide({ confluence: { action: 'SELL' }, reddit: { posts_analyzed: 1 } })).toBe('SELL');
+		});
+
+		it('defaults to BUY for bullish, neutral, or unknown sentiment', () => {
+			expect(deriveItemSide({ sentiment: 'bullish' })).toBe('BUY');
+			expect(deriveItemSide({ market_sentiment: { overall_sentiment: 'Alcista' } })).toBe('BUY');
+			expect(deriveItemSide({ confluence: { action: 'BUY' } })).toBe('BUY');
+			expect(deriveItemSide({})).toBe('BUY');
+		});
+	});
+
+	describe('recordExpandedAnalysisOutcomes', () => {
+		afterEach(() => {
+			jest.restoreAllMocks();
+		});
+
+		it('records signals when signalOutcomeService is enabled', () => {
+			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue({});
+
+			const analyzedItems = [
+				{
+					input: { raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+					analysis: {
+						confidence: 0.8,
+						price_data: { close: 60000 },
+						technical: {
+							price_data: { close: 60000 },
+							atr: 500,
+						},
+						market_sentiment: {
+							overall_sentiment: 'Bearish',
+							overall_rating: -0.6,
+						},
+					},
+					side: 'SELL',
+				},
+			];
+
+			recordExpandedAnalysisOutcomes(analyzedItems, { timeframe: '4h' }, {
+				requestId: 'req-123',
+				startTime: Date.now() - 1500,
+				source: 'expanded-analysis',
+			});
+
+			expect(recordSpy).toHaveBeenCalledTimes(1);
+			const recorded = recordSpy.mock.calls[0][0];
+			expect(recorded.requestId).toBe('req-123');
+			expect(recorded.source).toBe('expanded-analysis');
+			expect(recorded.symbol).toBe('BTCUSDT');
+			expect(recorded.exchange).toBe('BINANCE');
+			expect(recorded.timeframe).toBe('4h');
+			expect(recorded.setupType).toBe('expanded-analysis');
+			expect(recorded.side).toBe('SELL');
+			expect(recorded.price).toBe(60000);
+			expect(recorded.stop).toBe(60750); // 60000 + 500*1.5
+			expect(recorded.target).toBe(58500); // 60000 - 500*3
+			expect(recorded.score).toBe(-0.6);
+			expect(recorded.confidenceScore).toBe(0.8);
+			expect(recorded.priceSource).toBe('tradingview-mcp');
+
+			recordSpy.mockRestore();
+			signalOutcomeService.isEnabled.mockRestore();
+		});
+
+		it('does nothing when signalOutcomeService is disabled', () => {
+			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(false);
+			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal');
+
+			recordExpandedAnalysisOutcomes([
+				{
+					input: { raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+					analysis: { price_data: { close: 60000 } },
+				},
+			], { timeframe: '1D' });
+
+			expect(recordSpy).not.toHaveBeenCalled();
+			recordSpy.mockRestore();
+			signalOutcomeService.isEnabled.mockRestore();
+		});
+
+		it('fails open when recordSignal throws or rejects', () => {
+			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockRejectedValue(new Error('Firestore down'));
+
+			expect(() => {
+				recordExpandedAnalysisOutcomes([
+					{
+						input: { raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+						analysis: { price_data: { close: 60000 } },
+					},
+				], { timeframe: '1D' });
+			}).not.toThrow();
+
+			expect(recordSpy).toHaveBeenCalledTimes(1);
+			recordSpy.mockRestore();
+			signalOutcomeService.isEnabled.mockRestore();
+		});
+
+		it('normalizes overall_rating to [-1, 1] signed scale and confidence to [0, 1]', () => {
+			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue({});
+
+			recordExpandedAnalysisOutcomes([
+				{
+					input: { raw: 'BINANCE:ETHUSDT', exchange: 'BINANCE', symbol: 'ETHUSDT' },
+					side: 'SELL',
+					analysis: {
+						price_data: { close: 3000 },
+						market_sentiment: { overall_rating: 4 },
+					},
+				},
+				{
+					input: { raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+					side: 'BUY',
+					analysis: {
+						price_data: { close: 60000 },
+						market_sentiment: { overall_rating: 4 },
+					},
+				},
+			], { timeframe: '1D' });
+
+			expect(recordSpy).toHaveBeenCalledTimes(2);
+			expect(recordSpy.mock.calls[0][0]).toEqual(expect.objectContaining({
+				symbol: 'ETHUSDT',
+				side: 'SELL',
+				score: -0.8,
+				confidenceScore: 0.8,
+			}));
+			expect(recordSpy.mock.calls[1][0]).toEqual(expect.objectContaining({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				score: 0.8,
+				confidenceScore: 0.8,
+			}));
+
+			recordSpy.mockRestore();
+			signalOutcomeService.isEnabled.mockRestore();
+		});
+	});
+
+	describe('selectTakeProfitWithMinRatio', () => {
+		it('prefers the next S/R level when the nearest resistance fails the floor', () => {
+			const result = selectTakeProfitWithMinRatio({
+				price: 100,
+				stopLoss: 94,
+				atr: 4,
+				techData: {
+					support_resistance: {
+						nearest_resistance: 102,
+						resistance_1: 130,
+						resistance_2: 150,
+					},
+				},
+				side: 'BUY',
+				minRatio: 1.5,
+			});
+			expect(result).toBe(130);
+		});
+
+		it('falls back to the opposite Bollinger band when S/R candidates fail', () => {
+			const result = selectTakeProfitWithMinRatio({
+				price: 100,
+				stopLoss: 94,
+				atr: 4,
+				techData: { support_resistance: { nearest_resistance: 102 } },
+				bollinger: { bb_upper: 116 },
+				side: 'BUY',
+				minRatio: 1.5,
+			});
+			expect(result).toBe(116);
+		});
+
+		it('uses the ATR fallback when no S/R or Bollinger candidate qualifies', () => {
+			const result = selectTakeProfitWithMinRatio({
+				price: 100,
+				stopLoss: 94,
+				atr: 4,
+				techData: {},
+				bollinger: {},
+				side: 'BUY',
+				minRatio: 1.5,
+			});
+			expect(result).toBe(112);
+		});
+
+		it('returns null when no candidate clears the floor', () => {
+			const result = selectTakeProfitWithMinRatio({
+				price: 100,
+				stopLoss: 80,
+				atr: 1,
+				techData: { support_resistance: { nearest_resistance: 102, resistance_1: 105 } },
+				bollinger: { bb_upper: 108 },
+				side: 'BUY',
+				minRatio: 5,
+			});
+			expect(result).toBeNull();
+		});
+
+		it('handles SELL-side geometry with progressively nearer supports', () => {
+			const result = selectTakeProfitWithMinRatio({
+				price: 100,
+				stopLoss: 115,
+				atr: 4,
+				techData: {
+					support_resistance: {
+						nearest_support: 98,
+						support_1: 80,
+						support_2: 70,
+					},
+				},
+				side: 'SELL',
+				minRatio: 1.5,
+			});
+			// SELL risk = 115-100 = 15.
+			// nearest_support 98 -> reward = 2, R:R = 2/15 = 0.13 (skip).
+			// support_1 80 -> reward = 20, R:R = 20/15 = 1.33 (skip).
+			// support_2 70 -> reward = 30, R:R = 30/15 = 2.0 (accept).
+			expect(result).toBe(70);
+		});
+	});
+
+	describe('buildReportRow plan-quality mirror', () => {
+		it('renders the controller R:R + plan-quality line for sub-floor plans', () => {
+			const report = buildExpandedAnalysisAlertReport([
+				{
+					input: { raw: 'BINANCE:ETHUSDT', exchange: 'BINANCE', symbol: 'ETHUSDT' },
+					analysis: {
+						technical: {
+							price_data: { current_price: 2495.64 },
+							technical_indicators: { RSI: 55 },
+							support_resistance: { nearest_resistance: 2655.56 },
+							bollinger_bands: { lower: 1564.74 },
+						},
+						confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+						news: { count: 1 },
+					},
+					side: 'BUY',
+					risk: {
+						entry_price: 2495.64,
+						side: 'BUY',
+						stop_loss: 1564.74,
+						target: 2655.56,
+						invalidation_level: 1564.74,
+						risk_reward_ratio: 0.1718,
+						source: 'bollinger',
+						valid: false,
+						rejectionReason: 'risk_reward_below_minimum',
+						minRiskRewardRatio: 1.5,
+					},
+				},
+			], { now: new Date('2026-05-22T12:00:00Z') });
+
+			expect(report).toContain('- ⚠️ *R/R por debajo del mínimo 1.50:* plan descartado');
+			expect(report).toContain('- *Risk/Reward:* 0.17x');
 		});
 	});
 });

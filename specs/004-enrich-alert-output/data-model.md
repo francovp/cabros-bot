@@ -15,7 +15,8 @@ Represents the structured data extracted from an alert.
 | `technical_levels` | `object` | Object containing `supports` and `resistances` arrays. |
 | `invalidation_level` | `string \| number` (optional) | Price level where the setup is invalidated. |
 | `target_level` | `string \| number` (optional) | Primary profit target for the setup. |
-| `setup_type` | `string` (optional) | One of `breakout`, `mean_reversion`, `trend_continuation`, or `reversal`. |
+| `setup_type` | `string` (optional) | One of `breakout`, `mean_reversion`, `trend_continuation`, or `reversal`. Paired with `setup_evidence`. |
+| `setup_evidence` | `string` (optional) | One-line rationale or observed market structure supporting `setup_type`. Paired with `setup_type` (both omitted if uncorroborated). |
 | `risk_reward_ratio` | `string \| number` (optional) | Estimated risk/reward ratio, such as `2.5:1`. |
 | `sources` | `Source[]` | List of verified sources derived from `searchResults` returned by `genaiClient.search`. |
 
@@ -64,6 +65,7 @@ Represents a citation source.
       "type": "string",
       "enum": ["breakout", "mean_reversion", "trend_continuation", "reversal"]
     },
+    "setup_evidence": { "type": "string" },
     "risk_reward_ratio": { "type": ["string", "number"] }
   }
 }

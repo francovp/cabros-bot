@@ -1,0 +1,74 @@
+name: Backlog Hygiene
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Apply mutations (labels and duplicate comments) - default false (dry run)'
+        type: boolean
+        required: false
+        default: false
+      limit:
+        description: 'Maximum open issues to evaluate'
+        required: false
+        default: '200'
+  schedule:
+    # Monthly scheduled pass at 04:00 UTC on the 1st
+    - cron: '0 4 1 * *'
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  backlog-hygiene:
+    name: Backlog Hygiene Pass
+    # Strictly opt-in: always runs on manual workflow_dispatch, but schedule cron is gated by BACKLOG_HYGIENE_CRON repository variable
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && vars.BACKLOG_HYGIENE_CRON != '')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify gh CLI authentication
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh auth status
+
+      - name: Run Backlog Hygiene
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          INPUT_APPLY: ${{ github.event.inputs.apply }}
+          INPUT_LIMIT: ${{ github.event.inputs.limit || '200' }}
+        run: |
+          APPLY_FLAG=""
+          if [ "$INPUT_APPLY" = "true" ]; then
+            APPLY_FLAG="--apply"
+          else
+            APPLY_FLAG="--dry-run"
+          fi
+          node scripts/backlog-hygiene.js $APPLY_FLAG --limit "$INPUT_LIMIT" --report backlog-report.md
+
+      - name: Upload Backlog Hygiene Report
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        if: always()
+        with:
+          name: backlog-report
+          path: backlog-report.md
+          if-no-files-found: ignore

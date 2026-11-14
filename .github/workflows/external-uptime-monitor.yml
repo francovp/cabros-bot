@@ -1,0 +1,109 @@
+name: External Uptime Monitor
+
+# Platform-independent production liveness monitor (issue #1107).
+#
+# On 2026-08-31 the hosting platform removed the production deployment
+# platform-side (trial expiry): the public URL began answering
+# `404 {"status":"error","code":404,"message":"Application not found"}` and
+# nothing detected it for six days. Any check that lives inside the deployment
+# cannot see that failure class, so this check runs from GitHub instead.
+#
+# Configuration — repository variables (all optional, all defaulted):
+#   UPTIME_MONITOR_BASE_URL     canonical production origin
+#                               (default: https://cabros-crypto-bot-telegram.onrender.com)
+#   UPTIME_MONITOR_CHECK_DOCS   also probe the public /docs contract (default: true)
+#   UPTIME_MONITOR_TIMEOUT_MS   per-request deadline in ms (default: 10000)
+#
+# Configuration — repository secrets (both optional):
+#   TELEGRAM_BOT_TOKEN                    admin-notifications bot token
+#   TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID  admin chat to page on a state transition
+#
+# No API key is required or accepted. `/healthcheck` is mounted in app.js before
+# `validateApiKey` and before the rate limiter, so the probe is secretless by
+# design and cannot degrade into a silent no-op when a secret is not provisioned.
+#
+# Alert routing:
+#   - Primary, zero-config: a non-zero exit fails this job, and GitHub notifies
+#     repository admins of failed workflows.
+#   - Optional: the script pages the admin chat once on a down transition and
+#     once on recovery. It deliberately does not re-page on every interval of a
+#     continuing outage.
+#
+# Exit codes (see ops/external-uptime-monitor.js):
+#   0 UP   3 HEALTHCHECK_UNREACHABLE   4 HEALTHCHECK_BODY_UNEXPECTED
+#   5 DOCS_UNREACHABLE   6 BASE_URL_INVALID   7 MONITOR_INTERNAL_ERROR
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'Override UPTIME_MONITOR_BASE_URL'
+        required: false
+        default: ''
+      force_page:
+        description: 'Send the Telegram page even when there is no state transition'
+        required: false
+        default: false
+        type: boolean
+
+# actions: read is required to read the previous run conclusion; contents: read
+# for the checkout.
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: external-uptime-monitor
+  # Never cancel an in-flight probe: a cancelled run is an inconclusive verdict
+  # and would leave the state machine ambiguous.
+  cancel-in-progress: false
+
+jobs:
+  uptime-monitor:
+    name: Probe production liveness
+    runs-on: ubuntu-latest
+    # The probe is bounded by UPTIME_MONITOR_TIMEOUT_MS; this is the outer bound.
+    timeout-minutes: 3
+
+    steps:
+      # MANDATORY: ops/external-uptime-monitor.js lives in the repository. Without
+      # this step the job dies at 127 before any request is made, which is the
+      # silent failure mode behind issue #971.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Read the previous run conclusion
+        id: prev
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          conclusion="$(gh api "repos/${{ github.repository }}/actions/workflows/external-uptime-monitor.yml/runs?per_page=1&status=completed" \
+            --jq '.workflow_runs[0].conclusion // "none"' 2>/dev/null || echo '')"
+          if [[ -z "$conclusion" ]]; then
+            # Fail open: the very first run has no predecessor, and an API hiccup
+            # must not be reported as a production outage.
+            conclusion="none"
+            echo "::notice::No previous monitor run conclusion available; assuming none."
+          fi
+          echo "conclusion=$conclusion" >> "$GITHUB_OUTPUT"
+
+      - name: Run the external uptime monitor
+        env:
+          UPTIME_MONITOR_BASE_URL: ${{ inputs.base_url || vars.UPTIME_MONITOR_BASE_URL || 'https://cabros-crypto-bot-telegram.onrender.com' }}
+          UPTIME_MONITOR_CHECK_DOCS: ${{ vars.UPTIME_MONITOR_CHECK_DOCS || 'true' }}
+          UPTIME_MONITOR_TIMEOUT_MS: ${{ vars.UPTIME_MONITOR_TIMEOUT_MS || '10000' }}
+          UPTIME_MONITOR_PREVIOUS_CONCLUSION: ${{ steps.prev.outputs.conclusion }}
+          # A manual workflow_dispatch defaults to no paging so an operator test
+          # run cannot page the admin chat; `force_page` opts back in. Scheduled
+          # runs must be able to page, and `inputs` is empty on a schedule event,
+          # so the event name is part of the condition: keying this on
+          # `inputs.force_page` alone would disable paging on every scheduled run.
+          UPTIME_MONITOR_DISABLE_PAGE: ${{ (github.event_name == 'workflow_dispatch' && !inputs.force_page) && '1' || '0' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID }}
+        # No continue-on-error, no `|| true`: the exit code IS the alert signal.
+        run: node ops/external-uptime-monitor.js --previous-conclusion "$UPTIME_MONITOR_PREVIOUS_CONCLUSION"

@@ -14,6 +14,20 @@
 //   - source:         string     (required) - always "webhook"
 //   - useTradingViewData: bool   (required) - request query flag
 //
+// Collection: alertAcknowledgements
+// Document ID: <alertId>__<sha256(chatId).slice(0, 32)>
+// Fields:
+//   - alertId:        string    (required) - FK to alerts/<id>
+//   - chatId:         string    (required) - sensitive, server-side only, never returned
+//   - chatIdHash:     string    (required) - SHA-256 hex for safe aggregation
+//   - action:         string    (required) - took_trade | skipped | no_trade_no_signal | snoozed
+//   - notes:          string    (optional, max 280 chars)
+//   - symbol:         string    (optional) - uppercase symbol for outcome join
+//   - exchange:       string    (optional) - uppercase exchange for outcome join
+//   - acknowledgedAt: timestamp (required) - server timestamp on first write
+//   - updatedAt:      timestamp (required) - server timestamp on every write
+//   - expiresAt:      timestamp (required) - acknowledgedAt + ALERT_STORAGE_RETENTION_DAYS
+//
 // Access pattern: server-side Admin SDK writes only. No client SDK used.
 // ===============================================================
 

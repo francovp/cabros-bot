@@ -2,13 +2,16 @@
 
 /* global AbortController */
 
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { getAnalyzer, setNotificationManager } = require('../../controllers/webhooks/handlers/newsMonitor/analyzer');
 const { getNotificationManager } = require('../../controllers/webhooks/handlers/alert/alert');
+const { isNewsMonitorPaused, syncNewsMonitorPauseState } = require('../../controllers/webhooks/handlers/newsMonitor/pauseState');
 const alertStorageService = require('../storage/AlertStorageService');
 const sentryService = require('../monitoring/SentryService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 
 const COLLECTION_NAME = 'newsMonitorSchedulerLocks';
 
@@ -52,7 +55,7 @@ function parseEnvBool(value, fallback = false) {
 }
 
 function getSymbolsFromEnv(name) {
-	return (process.env[name] || '')
+	return (resolveRemoteOverride(name) ?? process.env[name] ?? '')
 		.split(',')
 		.map((s) => String(s).trim())
 		.filter(Boolean);
@@ -83,10 +86,22 @@ class NewsMonitorSchedulerService {
 		this.lastRunExecutedCount = 0;
 		this.lastRunErrorCount = 0;
 		this.lastError = null;
+		this.isPausedFn = options.isPaused || isNewsMonitorPaused;
+		this.syncPauseStateFn = options.syncPauseState !== undefined
+			? options.syncPauseState
+			: (options.isPaused ? null : syncNewsMonitorPauseState);
 	}
 
 	isEnabled() {
 		return parseEnvBool(process.env.ENABLE_NEWS_MONITOR_SCHEDULER, false);
+	}
+
+	isPaused() {
+		try {
+			return Boolean(this.isPausedFn && this.isPausedFn());
+		} catch {
+			return false;
+		}
 	}
 
 	getWorkerRole() {
@@ -136,13 +151,15 @@ class NewsMonitorSchedulerService {
 	getStatus() {
 		const enabled = this.isEnabled();
 		const role = this.getWorkerRole();
-		const ready = enabled && role !== 'disabled';
+		const paused = this.isPaused();
+		const ready = enabled && role !== 'disabled' && !paused;
 
 		return {
 			enabled,
 			configured: true,
 			ready,
-			status: !enabled ? 'disabled' : (role === 'disabled' ? 'disabled' : 'ready'),
+			status: !enabled ? 'disabled' : (role === 'disabled' ? 'disabled' : (paused ? 'paused' : 'ready')),
+			paused,
 			role,
 			running: this.running,
 			intervalMs: this.getIntervalMs(),
@@ -255,6 +272,14 @@ class NewsMonitorSchedulerService {
 		let errorCount = 0;
 		let lastErrorMessage = null;
 
+		if (typeof this.syncPauseStateFn === 'function') {
+			try {
+				await this.syncPauseStateFn();
+			} catch {
+				// Fail-open: do not throw into the sweep execution
+			}
+		}
+
 		if (!parseEnvBool(process.env.ENABLE_NEWS_MONITOR, false)) {
 			// News monitor is disabled — skip sweep entirely.
 			this.lastRunAt = new Date(sweepStartTime);
@@ -269,6 +294,23 @@ class NewsMonitorSchedulerService {
 				errorCount: 0,
 				durationMs: this.lastRunDurationMs,
 				skipped: 'news-monitor-disabled',
+			};
+		}
+
+		if (this.isPaused()) {
+			// News monitor is paused — skip sweep entirely.
+			this.lastRunAt = new Date(sweepStartTime);
+			this.lastRunDurationMs = Date.now() - sweepStartTime;
+			this.lastRunSymbolCount = 0;
+			this.lastRunExecutedCount = 0;
+			this.lastRunErrorCount = 0;
+			this.lastError = null;
+			return {
+				symbolCount: 0,
+				executedCount: 0,
+				errorCount: 0,
+				durationMs: this.lastRunDurationMs,
+				skipped: 'news-monitor-paused',
 			};
 		}
 
@@ -312,7 +354,9 @@ class NewsMonitorSchedulerService {
 		try {
 			const result = await this._executeAnalysis(symbols, timeoutMs, {
 				...options,
-				renewLease: (nextUntilMs) => this._renewLease(nextUntilMs, leaseMs),
+				// Contract: renewLease receives the current time; _renewLease owns the
+				// now + leaseMs arithmetic. #1135 doubled the lease by passing a deadline here.
+				renewLease: (renewNowMs) => this._renewLease(renewNowMs, leaseMs),
 				leaseMs,
 			});
 			executedCount = result.executedCount;
@@ -496,8 +540,8 @@ class NewsMonitorSchedulerService {
 		const leaseMs = options.leaseMs || this.getLeaseMs();
 		const renewIntervalMs = Math.max(1000, Math.floor(leaseMs / 2));
 		const renewHandle = renewLease
-			? setInterval(() => {
-				renewLease(Date.now() + leaseMs).catch((err) => {
+			? createManagedInterval('news-monitor-lease-renewal', () => {
+				return renewLease(Date.now()).catch((err) => {
 					console.warn('[NewsMonitorScheduler] Lease renew tick failed:', err.message);
 				});
 			}, renewIntervalMs)
@@ -568,7 +612,7 @@ class NewsMonitorSchedulerService {
 			});
 		} finally {
 			clearTimeout(timer);
-			if (renewHandle) clearInterval(renewHandle);
+			if (renewHandle) await renewHandle.stop();
 			this.activeSweepController = null;
 		}
 

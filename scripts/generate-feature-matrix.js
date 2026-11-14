@@ -238,8 +238,9 @@ function getEnvReferencesFromContent(content) {
 		// dynamic-read helpers used throughout src/ (see docs-alignment test).
 		/\bparseEnvInt\(\s*['"]([A-Z][A-Z0-9_]*)['"]/g,
 		/\bgetSymbolsFromEnv\(\s*['"]([A-Z][A-Z0-9_]*)['"]/g,
-		// runtime-config property access (`getRuntimeConfig().WEBHOOK_IDEMPOTENCY_TTL_MS`).
+		// runtime-config property access (`getRuntimeConfig().WEBHOOK_IDEMPOTENCY_TTL_MS` or `runtimeConfig.FOO`).
 		/\bgetRuntimeConfig\(\)\.([A-Z][A-Z0-9_]*)\b/g,
+		/\bruntimeConfig\.([A-Z][A-Z0-9_]*)\b/g,
 	];
 	for (const pattern of patterns) {
 		for (const match of content.matchAll(pattern)) names.add(match[1]);

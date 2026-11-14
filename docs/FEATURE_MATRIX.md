@@ -33,6 +33,6 @@ No drift detected. All curated entries are backed by source code.
 
 ## Source coverage
 
-- **Environment variables referenced in source**: 188
-- **OpenAPI paths declared**: 31
-- **Status endpoint keys surfaced**: 79
+- **Environment variables referenced in source**: 342
+- **OpenAPI paths declared**: 83
+- **Status endpoint keys surfaced**: 210

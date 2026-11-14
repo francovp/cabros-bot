@@ -4,6 +4,7 @@ import globals from "globals";
 import eslintConfigPrettier from "eslint-config-prettier";
 
 export default [
+    { ignores: ['src/admin/vue.runtime.global.prod.js', 'public/admin/**'] },
     js.configs.recommended,
     eslintConfigPrettier,
     {

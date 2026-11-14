@@ -17,6 +17,14 @@ class NotificationChannel {
 	enabled = false;
 
 	/**
+	 * Check if channel is configured by operator intent
+	 * @returns {boolean}
+	 */
+	isConfigured() {
+		return false;
+	}
+
+	/**
    * Check if channel is enabled
    * @returns {boolean}
    */

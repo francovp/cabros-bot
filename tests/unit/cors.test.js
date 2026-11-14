@@ -52,6 +52,7 @@ describe('CORS configuration', () => {
 
 		it('allows Firebase Hosting preview channel subdomains', () => {
 			expect(isOriginAllowed('https://cabros-bot--preview-123.web.app')).toBe(true);
+			expect(isOriginAllowed('https://cabros-bot--pr-1211-abcdef.web.app')).toBe(true);
 			expect(isOriginAllowed('https://cabros-bot--pr-456.firebaseapp.com')).toBe(true);
 			expect(isOriginAllowed('https://other-bot--preview.web.app')).toBe(false);
 		});
@@ -97,10 +98,10 @@ describe('CORS configuration', () => {
 					'x-idempotency-key',
 					'If-Match',
 					'x-request-id',
-				])
+				]),
 			);
 			expect(options.exposedHeaders).toEqual(
-				expect.arrayContaining(['ETag', 'Idempotency-Replay', 'x-request-id', 'Location'])
+				expect.arrayContaining(['ETag', 'Idempotency-Replay', 'x-request-id', 'Location']),
 			);
 		});
 
