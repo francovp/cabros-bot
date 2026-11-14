@@ -1,6 +1,6 @@
 {
-  "scanTime": "2026-11-13T19:47:22.925Z",
-  "lastRun": "2026-11-13T17:47:02.003237Z",
+  "scanTime": "2026-11-14T23:46:50.816Z",
+  "lastRun": "2026-11-14T21:46:48.324776Z",
   "issues": 1,
   "prs": 791,
   "issueComments": 2,
@@ -8,10 +8,10 @@
   "correctionComments": [
     {
       "user": "francovp",
-      "body": "**agent-claim**: unknown-agent session-0A410473-B250-47C6-B469-7A85086DA606 2026-11-13T18:20:28Z",
-      "url": "https://github.com/francovp/cabros-bot/issues/802#issuecomment-6861358349",
-      "created_at": "2026-11-13T18:20:36Z",
-      "issue_url": "https://api.github.com/repos/francovp/cabros-bot/issues/802"
+      "body": "**agent-claim**: unknown-agent session-E48DACC7-E760-41DD-BBA2-2097FFB0E097 2026-11-14T22:28:52Z",
+      "url": "https://github.com/francovp/cabros-bot/issues/762#issuecomment-6885195032",
+      "created_at": "2026-11-14T22:29:00Z",
+      "issue_url": "https://api.github.com/repos/francovp/cabros-bot/issues/762"
     }
   ],
   "newIssues": [],
