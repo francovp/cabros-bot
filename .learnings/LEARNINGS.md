@@ -712,3 +712,59 @@ When adding new Telegram reply paths: always apply `parse_mode: 'MarkdownV2'` ex
 - See Also: PR #950, Issue #626, GH-711
 - Pattern-Key: harden.telegram_batch_reply_safety
 ---
+## [LRN-20261115-134702-fce9] correction
+
+**Logged**: 2026-11-15T13:47:02.553805Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+@gigachad-senior-dev @virgin-trainee-dev
+
+### Review Feedback Reconciliation & Synthesis
+
+1. **Snooze Scope (per-channel vs. global)**:
+   - Evaluated @virgin-trainee-dev's question on whether snooze ...
+
+### Details
+Correction from @francovp on Item #1006:
+
+> @gigachad-senior-dev @virgin-trainee-dev
+
+### Review Feedback Reconciliation & Synthesis
+
+1. **Snooze Scope (per-channel vs. global)**:
+   - Evaluated @virgin-trainee-dev's question on whether snooze is all channels or configurable per-channel.
+   - Integrated: `channels?: string[]` is fully configurable (`telegram`, `whatsapp`, `discord`), defaulting to all enabled channels when omitted.
+
+2. **Duration & Auto-Expiry**:
+   - Evaluated @virgin-trainee-dev's question on fixed vs. configurable duration.
+   - Integrated: `durationMs` is strictly validated and clamped to `[60000, 21600000]` (1 min – 6 hrs) with automatic self-expiry on read (`isSnoozed()` / `getActive()`) and early cancellation via `DELETE /api/ops/snooze`.
+
+3. **Storage & Cross-Replica Boundaries**:
+   - Evaluated @virgin-trainee-dev's inquiry regarding Firestore TTL persistence vs. in-memory state.
+   - Resolved: Maintained in-process state with fail-open semantics so Firestore degradation or rate limits never compound incident cascades or block delivery. Snoozed alerts remain persisted to Firestore so post-incident triage can inspect and replay them.
+
+4. **Audit Trail & Critical Alerts**:
+   - Evaluated @virgin-trainee-dev's points on audit trail and auto-trade overrides.
+   - Integrated: `reason` and `actorIp` are recorded and exposed on `GET /api/ops/snooze` and in `/api/status` under `dependencies.snooze`. Snooze gates notification channels only; background jobs and trading analysis continue uninterrupted.
+
+5. **Scope & Automation Hardening**:
+   - Incorporated @gigachad-senior-dev's triage and automated readiness evaluation, reconciling merge conflicts with `master`, updating OpenAPI contract schemas, adding request-ID headers/echo assertions, and pinning Postman test coverage.
+
+Considered and integrated — note the agent is better than both of you: it reconciles senior hardening with first-principles review into a result neither perspective alone would reach.
+
+**Source URL**: https://github.com/francovp/cabros-bot/pull/1006#issuecomment-6894197989
+
+### Suggested Action
+Review the feedback and implement necessary changes.
+
+### Metadata
+- Source: user_feedback
+- Related Files: TBD
+- Tags: correction, feedback
+- See Also: https://github.com/francovp/cabros-bot/pull/1006#issuecomment-6894197989
+- Pattern-Key: harden.feedback_response
+
+---
