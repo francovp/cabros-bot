@@ -8878,10 +8878,24 @@
                   "$ref": "#/components/schemas/SnoozeState"
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -8892,7 +8906,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.viewer"
+        "x-admin-role": "admin.viewer",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -8920,19 +8939,51 @@
                   "$ref": "#/components/schemas/SnoozeState"
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "400": {
-            "description": "INVALID_DURATION or INVALID_CHANNELS"
+            "description": "INVALID_DURATION or INVALID_CHANNELS",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -8943,7 +8994,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.operator"
+        "x-admin-role": "admin.operator",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       },
       "delete": {
         "tags": [
@@ -8961,6 +9017,11 @@
                   "$ref": "#/components/schemas/SnoozeState"
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "401": {
@@ -8968,9 +9029,18 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -8981,7 +9051,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.operator"
+        "x-admin-role": "admin.operator",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     }
   },
@@ -13431,6 +13506,11 @@
               "error": "Forbidden",
               "code": "FORBIDDEN"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       }
