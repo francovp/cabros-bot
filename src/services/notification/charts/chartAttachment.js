@@ -1,0 +1,111 @@
+'use strict';
+
+const { getChartRendererService } = require('./chartRenderer');
+const { parseTradingViewSignal } = require('../../tradingview/parseTradingViewSignal');
+
+/**
+ * Resolve the chart request an alert (or direct chart request) describes.
+ *
+ * Everything here is defensive: charts are strictly additive, so any missing or
+ * malformed field simply yields `null` and the caller keeps the text-only path.
+ */
+
+const TIMEFRAME_BAR_COUNTS = Object.freeze({ default: 5 });
+
+function pickSymbol(alert = {}) {
+	const candidates = [
+		alert.chartSymbol,
+		alert.symbol,
+		alert.enriched?.symbol,
+		alert.signalMeta?.symbol,
+	];
+	for (const candidate of candidates) {
+		if (typeof candidate === 'string' && candidate.trim()) {
+			return candidate.trim().toUpperCase();
+		}
+	}
+	return null;
+}
+
+function pickTimeframe(alert = {}) {
+	const candidates = [alert.timeframe, alert.enriched?.timeframe, alert.signalMeta?.timeframe];
+	for (const candidate of candidates) {
+		if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+	}
+	if (typeof alert.text === 'string' && alert.text.trim()) {
+		try {
+			const parsed = parseTradingViewSignal(alert.text);
+			if (typeof parsed?.timeframe === 'string' && parsed.timeframe.trim()) {
+				return parsed.timeframe.trim();
+			}
+		} catch {
+			// Fail-open: ignore parsing failures and use fallback
+		}
+	}
+	return '1h';
+}
+
+/**
+ * Decide which chart (if any) an alert should carry.
+ *
+ * @returns {{category: string, symbol: string, timeframe: string, bars: Array, entry?: number, target?: number, stop?: number, rangeKey: string}|null}
+ */
+function resolveChartRequest(alert = {}) {
+	if (!alert || typeof alert !== 'object') return null;
+	const bars = Array.isArray(alert.chartBars) ? alert.chartBars : null;
+	const symbol = pickSymbol(alert);
+	if (!bars || bars.length === 0 || !symbol) return null;
+
+	const isSparkline = alert.chartCategory === 'sparkline' || (!alert.chartCategory && bars.length <= TIMEFRAME_BAR_COUNTS.default);
+	const category = isSparkline ? 'sparkline' : 'candlestick';
+	const timeframe = pickTimeframe(alert);
+
+	// Entry is the current price; invalidation is the stop. Mixing them up
+	// labels the stop line as entry and omits the real stop overlay.
+	const enriched = alert.enriched && typeof alert.enriched === 'object' ? alert.enriched : null;
+	const entry = enriched?.current_price ?? enriched?.price_data?.current_price ?? alert.currentPrice ?? alert.entry;
+	const target = enriched?.target_level ?? alert.target_level ?? alert.target;
+	const stop = enriched?.invalidation_level ?? alert.invalidation_level ?? alert.stopLoss ?? alert.stop_loss;
+	const rangeKey = [
+		category === 'candlestick' ? 'full' : 'spark',
+		bars.length,
+		// Data identity: same bar count with updated prices must not reuse a
+		// stale PNG for up to the TTL. Hash normalized OHLCV values.
+		require('node:crypto').createHash('sha256')
+			.update(bars.map((bar) => [bar.open, bar.high, bar.low, bar.close, bar.volume].map((v) => String(Number(v))).join(',')).join(';'))
+			.digest('base64url').slice(0, 22),
+		entry ?? '', target ?? '', stop ?? '',
+	].join(':');
+
+	return {
+		category,
+		symbol,
+		timeframe,
+		bars,
+		entry,
+		target,
+		stop,
+		rangeKey,
+	};
+}
+
+/**
+ * Render the chart an alert asks for, or `null` when disabled/unavailable.
+ * Never throws.
+ */
+async function renderAlertChart(alert = {}, options = {}) {
+	try {
+		const renderer = options.renderer || getChartRendererService();
+		if (!renderer || typeof renderer.renderChart !== 'function' || !renderer.isEnabled()) return null;
+		const request = options.request || resolveChartRequest(alert);
+		if (!request) return null;
+		return await renderer.renderChart(request);
+	} catch (error) {
+		console.warn('chart-attachments: unable to resolve chart request; using text-only delivery', {
+			error: error?.message || 'unknown',
+		});
+		return null;
+	}
+}
+
+module.exports = { resolveChartRequest, renderAlertChart, pickSymbol, pickTimeframe };

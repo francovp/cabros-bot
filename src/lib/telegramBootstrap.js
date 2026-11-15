@@ -52,7 +52,7 @@ async function sendStartupDeploymentNotification({
 		return { sent: false, reason: 'no_admin_chat_configured' };
 	}
 
-	logger.log?.('Telegram Admin Notifications Chat ID:', adminChatId);
+	logger.log?.('Telegram admin notifications destination is configured');
 
 	const isDeploymentEnv = Boolean(
 		process.env.RENDER
@@ -108,11 +108,14 @@ async function sendStartupDeploymentNotification({
 		if (sentry && typeof sentry.captureExternalFailure === 'function') {
 			try {
 				sentry.captureExternalFailure({
-					provider: 'telegram-api',
-					attemptCount: 1,
-					durationMs,
-					lastErrorMessage: error.message,
-					lastErrorCode: error?.response?.error_code || error?.code || (controller.signal.aborted ? 'TIMEOUT' : 'STARTUP_NOTIFICATION_FAILED'),
+					channel: 'telegram',
+					external: {
+						provider: 'telegram-api',
+						attemptCount: 1,
+						durationMs,
+						lastErrorMessage: error.message,
+						lastErrorCode: error?.response?.error_code || error?.code || (controller.signal.aborted ? 'TIMEOUT' : 'STARTUP_NOTIFICATION_FAILED'),
+					},
 				});
 			} catch (sentryError) {
 				logger.warn?.('[index] Failed to record deployment notification failure in Sentry:', sentryError.message);

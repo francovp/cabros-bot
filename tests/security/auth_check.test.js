@@ -1,6 +1,7 @@
 const request = require('supertest');
 const express = require('express');
-const { validateApiKey } = require('../../src/lib/auth');
+const crypto = require('crypto');
+const { isValidApiKey, validateApiKey } = require('../../src/lib/auth');
 
 describe('Security: API Key Validation', () => {
 	let app;
@@ -47,6 +48,17 @@ describe('Security: API Key Validation', () => {
 
 		expect(res.status).toBe(200);
 		expect(res.body.success).toBe(true);
+	});
+
+	it('should use a fixed-length timing-safe comparison for keys of different lengths', () => {
+		const timingSafeEqual = jest.spyOn(crypto, 'timingSafeEqual');
+
+		expect(isValidApiKey({ headers: { 'x-api-key': 'short' } })).toBe(false);
+		expect(timingSafeEqual).toHaveBeenCalledTimes(1);
+		expect(timingSafeEqual.mock.calls[0][0].byteLength)
+			.toBe(timingSafeEqual.mock.calls[0][1].byteLength);
+
+		timingSafeEqual.mockRestore();
 	});
 
 	it('should allow requests (insecure mode) when WEBHOOK_API_KEY is not set in development or test mode', async () => {

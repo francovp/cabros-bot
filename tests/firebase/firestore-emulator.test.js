@@ -29,6 +29,7 @@ const scannerPresetModule = require('../../src/services/scannerPresets/ScannerPr
 const { JobRepository } = jobRepositoryModule;
 const { ScannerPresetService } = scannerPresetModule;
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+const { WatchlistService } = require('../../src/services/watchlist/WatchlistService');
 
 describe('Firestore emulator integration', () => {
 	let testEnvironment;
@@ -98,6 +99,17 @@ describe('Firestore emulator integration', () => {
 		});
 		expect((await alertStorageService.listAlerts({ limit: 1 })).alerts.map((alert) => alert.id)).toContain(alertId);
 		expect((await firestore.collection('alerts').doc(alertId).get()).exists).toBe(true);
+	});
+
+	it('persists a Telegram chat watchlist through the shared Admin client', async () => {
+		const service = new WatchlistService({ firestoreEnabled: true });
+		await service.add('-1001234567890', ['BTCUSDT', 'NASDAQ:NVDA']);
+		expect((await firestore.collection('watchlists').doc('-1001234567890').get()).data().symbols)
+			.toEqual(['BTCUSDT', 'NASDAQ:NVDA']);
+		const fresh = new WatchlistService({ firestoreEnabled: true });
+		expect(await fresh.get('-1001234567890')).toEqual(['BTCUSDT', 'NASDAQ:NVDA']);
+		await fresh.clear('-1001234567890');
+		expect((await firestore.collection('watchlists').doc('-1001234567890').get()).exists).toBe(false);
 	});
 
 	it('keeps idempotency reservations transactional and persists completed responses', async () => {
@@ -188,6 +200,18 @@ describe('Firestore emulator integration', () => {
 		});
 		expect(await scannerPresetService.deletePreset(preset.id)).toBe(true);
 		expect(await scannerPresetService.getPreset(preset.id)).toBeNull();
+	});
+
+	it('deduplicates concurrent job outcomes without replacing evaluated records', async () => {
+		const signal = { idempotencyKey: 'job:emulator:expanded-analysis:0', symbol: 'BINANCE:BTCUSDT', price: 50000 };
+		const [first, replay] = await Promise.all([signalOutcomeService.recordSignal(signal), signalOutcomeService.recordSignal(signal)]);
+		expect(first).toMatch(/^[a-f0-9]{64}$/);
+		expect(replay).toBe(first);
+		const ref = firestore.collection('tradingSignalOutcomes').doc(first);
+		await ref.update({ outcomeEvaluated: true });
+		expect(await signalOutcomeService.recordSignal(signal)).toBe(first);
+		expect((await ref.get()).data().outcomeEvaluated).toBe(true);
+		expect((await firestore.collection('tradingSignalOutcomes').get()).size).toBe(1);
 	});
 
 	it('writes and reads a signal outcome record without external market data', async () => {

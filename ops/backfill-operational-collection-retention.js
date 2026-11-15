@@ -130,6 +130,46 @@ function parseSignalOutcomeRetentionTtlMs(raw) {
 	return DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS * DAY_MS;
 }
 
+const DEFAULT_BINANCE_ORDER_AUDIT_RETENTION_DAYS = 30;
+const MIN_BINANCE_ORDER_AUDIT_RETENTION_DAYS = 1;
+const MAX_BINANCE_ORDER_AUDIT_RETENTION_DAYS = 365;
+
+function parseBinanceOrderAuditRetentionTtlMs(raw) {
+	if (raw !== undefined && raw !== null) {
+		const str = String(raw).trim();
+		if (!/^\d+$/.test(str)) {
+			return DEFAULT_BINANCE_ORDER_AUDIT_RETENTION_DAYS * DAY_MS;
+		}
+		const val = Number(str);
+		if (!Number.isSafeInteger(val) || val < MIN_BINANCE_ORDER_AUDIT_RETENTION_DAYS || val > MAX_BINANCE_ORDER_AUDIT_RETENTION_DAYS) {
+			return DEFAULT_BINANCE_ORDER_AUDIT_RETENTION_DAYS * DAY_MS;
+		}
+		return val * DAY_MS;
+	}
+
+	try {
+		const remoteDays = RemoteConfigService?.getRuntimeConfig?.().BINANCE_ORDER_AUDIT_RETENTION_DAYS;
+		if (typeof remoteDays === 'number' && Number.isSafeInteger(remoteDays) && remoteDays >= MIN_BINANCE_ORDER_AUDIT_RETENTION_DAYS && remoteDays <= MAX_BINANCE_ORDER_AUDIT_RETENTION_DAYS) {
+			return remoteDays * DAY_MS;
+		}
+	} catch {
+		// ignore
+	}
+
+	const envVal = process.env.BINANCE_ORDER_AUDIT_RETENTION_DAYS;
+	if (envVal !== undefined && envVal !== null) {
+		const str = String(envVal).trim();
+		if (/^\d+$/.test(str)) {
+			const val = Number(str);
+			if (Number.isSafeInteger(val) && val >= MIN_BINANCE_ORDER_AUDIT_RETENTION_DAYS && val <= MAX_BINANCE_ORDER_AUDIT_RETENTION_DAYS) {
+				return val * DAY_MS;
+			}
+		}
+	}
+
+	return DEFAULT_BINANCE_ORDER_AUDIT_RETENTION_DAYS * DAY_MS;
+}
+
 function getOperationalCollectionConfigs() {
 	return [
 		{
@@ -150,6 +190,11 @@ function getOperationalCollectionConfigs() {
 		{
 			collectionName: 'tradingSignalOutcomes',
 			ttlMs: parseSignalOutcomeRetentionTtlMs(),
+			options: {},
+		},
+		{
+			collectionName: 'binanceOrderAudit',
+			ttlMs: parseBinanceOrderAuditRetentionTtlMs(),
 			options: {},
 		},
 	];
@@ -237,6 +282,7 @@ async function backfillCollection(firestore, collectionName, ttlMs, options = {}
 			// Compute the baseline timestamp for the TTL offset.
 			const baseMs = getTimestampMillis(data.receivedAt)
 				?? getTimestampMillis(data.createdAt)
+				?? getTimestampMillis(data.timestamp)
 				?? getTimestampMillis(doc.createTime)
 				?? nowMs;
 
@@ -303,29 +349,21 @@ async function main() {
 		}
 	}
 
-	const collections = {};
 	const operationalConfigs = getOperationalCollectionConfigs();
 	const idempotencyTtlMs = operationalConfigs.find(({ collectionName }) => collectionName === 'idempotency_keys').ttlMs;
 	const dedupTtlMs = operationalConfigs.find(({ collectionName }) => collectionName === 'news-monitor-dedup').ttlMs;
 	const notificationRedriveTtlMs = operationalConfigs.find(({ collectionName }) => collectionName === 'notificationDeadLetters').ttlMs;
 	const signalOutcomeRetentionTtlMs = operationalConfigs.find(({ collectionName }) => collectionName === 'tradingSignalOutcomes').ttlMs;
+	const binanceOrderAuditRetentionTtlMs = operationalConfigs.find(({ collectionName }) => collectionName === 'binanceOrderAudit').ttlMs;
 
+	const collections = {};
 	for (const { collectionName, ttlMs, options } of operationalConfigs) {
-		try {
-			collections[collectionName] = await backfillCollection(
-				firestore,
-				collectionName,
-				ttlMs,
-				{ ...options, dryRun },
-			);
-		} catch (error) {
-			console.error(JSON.stringify({
-				event: 'operational_retention_backfill_failed',
-				collection: collectionName,
-				error: error.message,
-			}));
-			throw error;
-		}
+		collections[collectionName] = await backfillCollection(
+			firestore,
+			collectionName,
+			ttlMs,
+			{ ...options, dryRun },
+		);
 	}
 
 	console.log(JSON.stringify({
@@ -335,6 +373,7 @@ async function main() {
 		dedupTtlMs,
 		notificationRedriveTtlMs,
 		signalOutcomeRetentionTtlMs,
+		binanceOrderAuditRetentionTtlMs,
 		collections,
 	}));
 }
@@ -356,10 +395,14 @@ module.exports = {
 	parseDedupTtlMs,
 	parseNotificationRedriveTtlMs,
 	parseSignalOutcomeRetentionTtlMs,
+	parseBinanceOrderAuditRetentionTtlMs,
 	isDeliveryLease,
 	DELIVERY_LOCK_TTL_MS,
 	PENDING_STALE_TIMEOUT_MS,
 	DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS,
 	MAX_SIGNAL_OUTCOME_RETENTION_DAYS,
+	DEFAULT_BINANCE_ORDER_AUDIT_RETENTION_DAYS,
+	MIN_BINANCE_ORDER_AUDIT_RETENTION_DAYS,
+	MAX_BINANCE_ORDER_AUDIT_RETENTION_DAYS,
 	DAY_MS,
 };

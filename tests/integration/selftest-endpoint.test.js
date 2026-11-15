@@ -1,0 +1,204 @@
+'use strict';
+
+const request = require('supertest');
+const app = require('../../app');
+const { getRoutes } = require('../../src/routes');
+const { resetSelfTestService } = require('../../src/controllers/diagnostics/selftest');
+
+function saveEnv() {
+	return { ...process.env };
+}
+
+function restoreEnv(saved) {
+	for (const key of Object.keys(process.env)) {
+		if (!(key in saved)) delete process.env[key];
+	}
+	Object.assign(process.env, saved);
+}
+
+describe('Self-test diagnostic endpoint (GH-801)', () => {
+	let savedEnv;
+	let mockBot;
+
+	beforeEach(() => {
+		savedEnv = saveEnv();
+		Object.assign(process.env, {
+			WEBHOOK_API_KEY: 'test-key',
+			BOT_TOKEN: 'test-bot-token',
+			TELEGRAM_CHAT_ID: '123456789',
+			RATE_LIMIT_MAX: '100',
+			RATE_LIMIT_WINDOW_MS: '60000',
+		});
+		resetSelfTestService();
+		mockBot = {
+			botInfo: { id: 1, username: 'cabros_bot' },
+			telegram: {
+				sendMessage: jest.fn().mockResolvedValue({ message_id: 'noop' }),
+				getMe: jest.fn().mockResolvedValue({ id: 1, username: 'cabros_bot' }),
+			},
+		};
+		app.use('/api', getRoutes(mockBot));
+	});
+
+	afterEach(() => {
+		restoreEnv(savedEnv);
+		resetSelfTestService();
+	});
+
+	it('returns a not-yet-run response on the initial GET', async () => {
+		const res = await request(app)
+			.get('/api/selftest')
+			.set('x-api-key', 'test-key');
+
+		expect(res.status).toBe(200);
+		expect(res.body.status).toBe('unknown');
+		expect(res.body.message).toMatch(/self-test/);
+	});
+
+	it('does not starve dependencies when /api/status or getSelfTestService() is called before a diagnostic run', async () => {
+		// First call /api/status without dependencies (or with empty getter)
+		const statusRes = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'test-key');
+		expect(statusRes.status).toBe(200);
+
+		// Now run POST /api/selftest/run which provides mockBot
+		const runRes = await request(app)
+			.post('/api/selftest/run')
+			.set('x-api-key', 'test-key')
+			.send();
+
+		expect(runRes.status).toBe(200);
+		const botCheck = runRes.body.checks.find((c) => c.id === 'telegram.bot_info');
+		expect(botCheck).toBeDefined();
+		expect(botCheck.status).toBe('pass');
+		expect(botCheck.message).toContain('cabros_bot');
+	});
+
+	it('runs the full suite on POST /api/selftest/run and returns a summary', async () => {
+		const res = await request(app)
+			.post('/api/selftest/run')
+			.set('x-api-key', 'test-key')
+			.send();
+
+		expect(res.status).toBe(200);
+		expect(['pass', 'warn', 'fail']).toContain(res.body.status);
+		expect(res.body.checks.length).toBeGreaterThanOrEqual(10);
+		expect(res.body.summary.pass + res.body.summary.warn + res.body.summary.fail + res.body.summary.skipped)
+			.toBe(res.body.checks.length);
+	});
+
+	it('returns the cached result from the previous run on subsequent GET', async () => {
+		const run = await request(app)
+			.post('/api/selftest/run')
+			.set('x-api-key', 'test-key')
+			.send();
+		expect(run.status).toBe(200);
+		const firstId = run.body.requestId;
+
+		const get = await request(app)
+			.get('/api/selftest')
+			.set('x-api-key', 'test-key');
+		expect(get.status).toBe(200);
+		expect(get.body.cached).toBe(true);
+		expect(get.body.requestId).not.toBe(firstId);
+	});
+
+	it('supports a scoped `only` filter', async () => {
+		const res = await request(app)
+			.post('/api/selftest/run?only=auth.api_key,service.metadata')
+			.set('x-api-key', 'test-key')
+			.send();
+		expect(res.status).toBe(200);
+		expect(res.body.checks.map((c) => c.id).sort()).toEqual(['auth.api_key', 'service.metadata']);
+	});
+
+	it('rejects unknown check ids in `only` as a fail result', async () => {
+		const res = await request(app)
+			.post('/api/selftest/run?only=nope.nope')
+			.set('x-api-key', 'test-key')
+			.send();
+		expect(res.status).toBe(200);
+		expect(res.body.status).toBe('fail');
+		expect(res.body.checks[0].message).toMatch(/unknown checks/);
+	});
+
+	it('includes a fail entry for unknown check ids alongside valid ids in mixed scoped runs', async () => {
+		const res = await request(app)
+			.post('/api/selftest/run?only=auth.api_key,nope.nope')
+			.set('x-api-key', 'test-key')
+			.send();
+		expect(res.status).toBe(200);
+		expect(res.body.status).toBe('fail');
+		const authCheck = res.body.checks.find((c) => c.id === 'auth.api_key');
+		const unknownCheck = res.body.checks.find((c) => c.id === 'unknown');
+		expect(authCheck).toBeDefined();
+		expect(authCheck.status).toBe('pass');
+		expect(unknownCheck).toBeDefined();
+		expect(unknownCheck.status).toBe('fail');
+		expect(unknownCheck.message).toMatch(/unknown checks: nope\.nope/);
+	});
+
+	it('applies default rate limiter settings when RATE_LIMIT_MAX and RATE_LIMIT_WINDOW_MS are omitted', async () => {
+		delete process.env.RATE_LIMIT_MAX;
+		delete process.env.RATE_LIMIT_WINDOW_MS;
+		const res = await request(app)
+			.post('/api/selftest/run?only=rate_limiter.config')
+			.set('x-api-key', 'test-key')
+			.send();
+		expect(res.status).toBe(200);
+		expect(res.body.status).toBe('pass');
+		expect(res.body.checks[0].evidence).toEqual({ max: 100, windowMs: 900000 });
+	});
+
+	it('requires API key auth', async () => {
+		const res = await request(app)
+			.get('/api/selftest');
+		expect(res.status).toBe(401);
+	});
+
+	it('exposes the last result via /api/status under dependencies.selfTest', async () => {
+		await request(app)
+			.post('/api/selftest/run')
+			.set('x-api-key', 'test-key')
+			.send();
+
+		const res = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'test-key');
+		expect(res.status).toBe(200);
+		expect(res.body.dependencies).toBeDefined();
+		expect(res.body.dependencies.selfTest).toBeDefined();
+		expect(res.body.dependencies.selfTest.lastStatus).toMatch(/pass|warn|fail/);
+		expect(res.body.dependencies.selfTest.ttlSec).toBe(60);
+		expect(res.body.dependencies.selfTest.lastRunAt).not.toBeNull();
+	});
+
+	it('redacts sensitive evidence keys in check output', async () => {
+		process.env.TRADINGVIEW_MCP_URL = 'https://example.com/mcp?api-key=should-redact';
+		const res = await request(app)
+			.post('/api/selftest/run?only=tradingview_mcp.endpoint')
+			.set('x-api-key', 'test-key')
+			.send();
+		expect(res.status).toBe(200);
+		// The check exposes the endpoint value with query credentials stripped
+		expect(res.body.checks[0].evidence).toEqual({ endpoint: 'https://example.com/mcp' });
+	});
+
+	it('redacts basic auth and query credentials from TRADINGVIEW_MCP_URL in POST /api/selftest/run and cached GET', async () => {
+		process.env.TRADINGVIEW_MCP_URL = 'https://operator:secretpass@mcp.internal:9000/mcp?token=xyz123';
+		const runRes = await request(app)
+			.post('/api/selftest/run?only=tradingview_mcp.endpoint')
+			.set('x-api-key', 'test-key')
+			.send();
+		expect(runRes.status).toBe(200);
+		expect(runRes.body.checks[0].evidence).toEqual({ endpoint: 'https://mcp.internal:9000/mcp' });
+
+		const getRes = await request(app)
+			.get('/api/selftest')
+			.set('x-api-key', 'test-key');
+		expect(getRes.status).toBe(200);
+		const check = getRes.body.checks.find((c) => c.id === 'tradingview_mcp.endpoint');
+		expect(check.evidence).toEqual({ endpoint: 'https://mcp.internal:9000/mcp' });
+	});
+});

@@ -122,4 +122,46 @@ describe('DeliveryMetricsService', () => {
 		service.resetForTesting();
 		expect(service.getSnapshot()).toBeNull();
 	});
+
+	describe('getChannelHealth (#1168 admin paging fallback)', () => {
+		it('reports unknown for a channel with no recorded deliveries', () => {
+			expect(service.getChannelHealth('telegram')).toEqual({
+				state: 'unknown', total: 0, success: 0, failure: 0, successRate: null,
+			});
+		});
+
+		it('reports unknown for malformed channel input (fail-open)', () => {
+			expect(service.getChannelHealth('').state).toBe('unknown');
+			expect(service.getChannelHealth(undefined).state).toBe('unknown');
+			expect(service.getChannelHealth(null).state).toBe('unknown');
+		});
+
+		it('reports failing when every delivery failed', () => {
+			service.record({ channel: 'telegram', success: false });
+			service.record({ channel: 'telegram', success: false });
+			service.record({ channel: 'telegram', success: false });
+
+			expect(service.getChannelHealth('telegram')).toEqual({
+				state: 'failing', total: 3, success: 0, failure: 3, successRate: 0,
+			});
+		});
+
+		it('reports healthy when every delivery succeeded', () => {
+			service.record({ channel: 'whatsapp', success: true });
+			expect(service.getChannelHealth('whatsapp').state).toBe('healthy');
+		});
+
+		it('reports degraded when the success rate is below one half', () => {
+			service.record({ channel: 'whatsapp', success: true });
+			service.record({ channel: 'whatsapp', success: false });
+			service.record({ channel: 'whatsapp', success: false });
+			expect(service.getChannelHealth('whatsapp').state).toBe('degraded');
+		});
+
+		it('reports healthy at exactly a one half success rate', () => {
+			service.record({ channel: 'discord', success: true });
+			service.record({ channel: 'discord', success: false });
+			expect(service.getChannelHealth('discord').state).toBe('healthy');
+		});
+	});
 });

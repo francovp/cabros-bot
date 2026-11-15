@@ -35,7 +35,7 @@ The following surfaces are **in scope** for vulnerability reports:
 - Server-side Firestore persistence for alerts, replay attempts, idempotency claims, scanner presets, jobs, and signal outcomes, plus server-side Firebase Remote Config loading.
 - Webhook authentication (`validateApiKey` timing-safe comparison, Firebase ID-token verification for the admin console).
 
-The deployed service is publicly reachable at `https://cabros-bot-production.up.railway.app`; authorized Railway PR previews use the host pattern `cabros-bot-cabros-bot-pr-<PR_NUMBER>.up.railway.app`. Do not target any other infrastructure you may discover during research.
+The deployed service is publicly reachable at `https://cabros-crypto-bot-telegram.onrender.com`; authorized PR previews are resolved dynamically from the GitHub Deployments API by `.agents/skills/issue-automator/scripts/get-pr-deployment-url.sh`, falling back to the Railway host pattern `cabros-bot-cabros-bot-pr-<PR_NUMBER>.up.railway.app` with a warning when no GitHub deployment exists. Do not target any other infrastructure you may discover during research.
 
 ## Out of Scope
 
