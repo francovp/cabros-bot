@@ -8063,13 +8063,13 @@
           "429": {
             "$ref": "#/components/responses/Error"
           },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "502": {
             "$ref": "#/components/responses/Error"
           },
           "504": {
-            "$ref": "#/components/responses/Error"
-          },
-          "500": {
             "$ref": "#/components/responses/Error"
           }
         },
@@ -8262,22 +8262,22 @@
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
-          "429": {
-            "$ref": "#/components/responses/Error"
-          },
-          "502": {
-            "$ref": "#/components/responses/Error"
-          },
-          "504": {
-            "$ref": "#/components/responses/Error"
-          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
           },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
           "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
             "$ref": "#/components/responses/Error"
           }
         },
@@ -8458,22 +8458,22 @@
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
-          "429": {
-            "$ref": "#/components/responses/Error"
-          },
-          "502": {
-            "$ref": "#/components/responses/Error"
-          },
-          "504": {
-            "$ref": "#/components/responses/Error"
-          },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
           },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
           "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
             "$ref": "#/components/responses/Error"
           }
         },
@@ -8529,14 +8529,14 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
           "429": {
             "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
             "$ref": "#/components/responses/Error"
-          },
-          "415": {
-            "$ref": "#/components/responses/ExpressParserError"
           }
         },
         "parameters": [
@@ -8857,6 +8857,204 @@
           },
           {
             "ApiKeyQuery": []
+          }
+        ]
+      }
+    },
+    "/api/ops/snooze": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Get the current operator-initiated incident snooze",
+        "operationId": "getSnooze",
+        "description": "Returns the active global incident snooze or { active: false } when none is active. Read-only; admin.viewer role required.",
+        "responses": {
+          "200": {
+            "description": "Active snooze or { active: false }",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SnoozeState"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Activate an operator-initiated incident snooze",
+        "operationId": "postSnooze",
+        "description": "Suppresses notifications on the requested channels for the bounded durationMs. durationMs is clamped to [60000, 21600000]. Subsequent sendToAll / sendToChannels dispatches for the named channels return SNOOZED SendResults until the snooze expires or is cancelled.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SnoozeActivateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Active snooze details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SnoozeState"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_DURATION or INVALID_CHANNELS",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Cancel the active incident snooze",
+        "operationId": "deleteSnooze",
+        "description": "Cancels the active snooze early. Returns { active: false } whether or not a snooze was active.",
+        "responses": {
+          "200": {
+            "description": "Cancellation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SnoozeState"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ]
       }
@@ -13288,6 +13486,25 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/OperationEstimateResponse"
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Caller is authenticated but lacks the required role",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "Forbidden",
+              "code": "FORBIDDEN"
             }
           }
         },
@@ -28056,6 +28273,89 @@
             "type": "string",
             "format": "date-time",
             "example": "2026-09-04T08:00:00.000Z"
+          }
+        }
+      },
+      "SnoozeState": {
+        "type": "object",
+        "description": "Represents the current operator-initiated global incident snooze. When active is false no snooze is in effect and the other fields are absent.",
+        "required": [
+          "active"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "activatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO timestamp when the snooze was activated."
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO timestamp when the snooze auto-expires."
+          },
+          "durationMs": {
+            "type": "integer",
+            "description": "Effective snooze duration in milliseconds (clamped to [60000, 21600000])."
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true,
+            "description": "Free-text reason recorded for audit (truncated to 200 chars)."
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            },
+            "description": "Channels currently suppressed by the snooze."
+          },
+          "actorIp": {
+            "type": "string",
+            "nullable": true,
+            "description": "Operator IP captured for audit (truncated to 64 chars)."
+          }
+        }
+      },
+      "SnoozeActivateRequest": {
+        "type": "object",
+        "required": [
+          "durationMs"
+        ],
+        "properties": {
+          "durationMs": {
+            "type": "integer",
+            "minimum": 60000,
+            "maximum": 21600000,
+            "description": "Snooze duration in milliseconds. Clamped to [60000, 21600000] (1 minute - 6 hours)."
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Free-text reason recorded for audit."
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            },
+            "description": "Channels to snooze. Defaults to all known channels when omitted."
+          },
+          "actorIp": {
+            "type": "string",
+            "description": "Optional operator IP for audit; falls back to req.ip."
           }
         }
       }

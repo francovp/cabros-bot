@@ -1121,3 +1121,17 @@ The cache retains only SHA-256 fingerprints and request IDs, is bounded to 10000
 | `ENABLE_ENVIRONMENT_BANNER` | `true` | Emit optional `X-Cabros-Environment`, eight-character `X-Cabros-Commit` (when available), and `X-Cabros-Service` response headers. Rechecked on every request, including errors and healthchecks. |
 
 The template uses `useInAppDefault: true` to preserve deployment fallbacks until an explicit remote value is published. This non-secret display setting controls response headers; the public snapshot and console remain available when headers are disabled. Existing `ENABLE_MESSAGE_FOOTER_METADATA` independently controls alert footer metadata, including `(env: preview @ abcdef12)` in non-production environments. Production messages keep their current footer. Credentials, authentication, security controls, destinations, and startup gates remain environment-only.
+
+### Operator-Incident Snooze (#762)
+
+`/api/ops/snooze` provides a small, in-process operator surface for temporarily suppressing all outgoing alerts on a chosen set of channels (use case: flash crash, exchange incident, FOMC window). The snooze is in-process per replica by default and fails open on read/write errors. Optional Firestore cross-replica persistence is not enabled here; the in-memory map is the source of truth for the delivery short-circuit.
+
+- `GET /api/ops/snooze` returns the active snooze (with `activatedAt`, `expiresAt`, `durationMs`, `reason`, and `channels`) or `{ active: false }`.
+- `POST /api/ops/snooze` activates a snooze. Body: `{ durationMs: number, reason?: string, channels?: string[], actorIp?: string }`. `durationMs` is clamped to `[60000, 21600000]` (1 minute to 6 hours). `channels` defaults to `["telegram", "whatsapp", "discord"]` when omitted.
+- `DELETE /api/ops/snooze` cancels the active snooze early. Idempotent: returns `{ active: false }` whether or not a snooze was active.
+
+`POST` and `DELETE` require the operator role (legacy `x-api-key` header, `ADMIN_API_KEY`, or a Firebase `admin.operator` bearer). `GET` requires the viewer role.
+
+While a snooze is active, `NotificationManager.sendToAll` and `sendToChannels` short-circuit the named channels and return `SendResult` objects with `success: false`, `category: "SNOOZED"`, and `snoozedUntil`. The webhook response includes the same `SNOOZED` `deliveryResults` so the TradingView caller can see the alert was admitted but not delivered. Snoozed alerts are still persisted to Firestore (existing fire-and-forget path) and the existing dead-letter pipeline is unaffected; the `SNOOZED` category is a distinct `SendResult.category` so downstream admin paging does not treat it as a failure.
+
+`/api/status` and `/api/capabilities` expose the current snooze under `dependencies.snooze` (`{ active, activatedAt, expiresAt, reason, channels }` or `{ active: false }`) so operators can correlate "alerts look quiet" reports with the active suppression window.

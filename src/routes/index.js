@@ -22,6 +22,7 @@ const {
 	postRetryJob,
 	postRetryFailedJob,
 } = require('../controllers/webhooks/handlers/jobs/jobs');
+const { getSnooze, postSnooze, deleteSnooze } = require('../controllers/ops/snooze');
 const { postOperationEstimate } = require('../controllers/operations/estimate');
 const {
 	listAlerts,
@@ -256,6 +257,10 @@ function getRoutes(botOrGetter) {
 	router.get('/demo/alert', validateApiKey, getDemoAlert());
 	router.get('/demo/outcomes', validateApiKey, getDemoOutcomes());
 	router.get('/demo/scanner', validateApiKey, getDemoScanner());
+
+	router.get('/ops/snooze', ...adminRead, getSnooze);
+	router.post('/ops/snooze', ...adminWrite, postSnooze);
+	router.delete('/ops/snooze', ...adminWrite, deleteSnooze);
 
 	return router;
 }

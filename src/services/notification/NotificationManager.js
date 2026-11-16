@@ -8,6 +8,7 @@ const remoteConfigService = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { notificationRedriveService } = require('./NotificationRedriveService');
 const { deliveryMetricsService } = require('./DeliveryMetricsService');
+const { snoozeService } = require('./SnoozeService');
 const { adminPagingDeduplicator } = require('./adminPagingDeduplicator');
 const { chatPreferenceService } = require('../preferences/ChatPreferenceService');
 const NotificationChannel = require('./NotificationChannel');
@@ -380,6 +381,33 @@ class NotificationManager {
    * Validate all notification channels on startup
    * @returns {Promise<Array>} Array of validation results
    */
+	/**
+	 * Return the snooze short-circuit results for the requested channel set.
+	 * If the snooze is active for a subset of the requested channels, only those
+	 * channels are short-circuited and the rest continue to dispatch.
+	 *
+	 * @param {string[]} channelNames - List of channel names being dispatched.
+	 * @returns {Array<{channel: string, success: boolean, category: string, snoozedUntil: string, error: string}>}
+	 */
+	_getSnoozedResults(channelNames) {
+		const snoozedResults = [];
+		for (const chName of channelNames) {
+			if (snoozeService.isSnoozed(chName)) {
+				const active = snoozeService.getActive();
+				snoozedResults.push({
+					channel: chName,
+					success: false,
+					category: 'SNOOZED',
+					snoozedUntil: active && active.expiresAt
+						? new Date(active.expiresAt).toISOString()
+						: null,
+					error: 'Notification channel is currently snoozed by operator',
+				});
+			}
+		}
+		return snoozedResults;
+	}
+
 	async validateAll() {
 		const channelsArray = Array.from(this.channels.entries());
 		const validationPromises = channelsArray.map(async ([name, channel]) => {
@@ -906,6 +934,20 @@ class NotificationManager {
 		} = context;
 		const isSpecificDispatch = dispatchType === 'specific';
 		const { parentSpan } = options;
+
+		// Snooze short-circuit: if a snooze is active for any of the requested
+		// channels, surface SNOOZED SendResults for those channels and let the
+		// remaining channels dispatch normally.
+		const snoozedResults = this._getSnoozedResults(channels.map((ch) => ch.name));
+		if (snoozedResults.length === channels.length) {
+			console.info('[NotificationManager] All requested channels are snoozed; short-circuiting dispatch');
+			return snoozedResults;
+		}
+		let dispatchChannels = channels;
+		if (snoozedResults.length > 0) {
+			const snoozedSet = new Set(snoozedResults.map((r) => r.channel));
+			dispatchChannels = channels.filter((ch) => !snoozedSet.has(ch.name));
+		}
 		console.debug(
 			'[NotificationManager] Sending alert to',
 			channels.length,
@@ -928,7 +970,7 @@ class NotificationManager {
 
 		let results;
 		try {
-			const sendPromises = channels.map((ch) => {
+			const sendPromises = dispatchChannels.map((ch) => {
 				const sendSpan = sentryService.startInactiveSpan({
 					name: `notification.send.${ch.name}`,
 					op: 'notification.send',
@@ -1025,7 +1067,7 @@ class NotificationManager {
 		const totalDurationMs = Date.now() - startTime;
 
 		const formattedResults = results.map((r, idx) => {
-			const chName = channels[idx] ? channels[idx].name : 'unknown';
+			const chName = dispatchChannels[idx] ? dispatchChannels[idx].name : 'unknown';
 			const channelKey = this.resolveIdempotencyKey(alert, {
 				...options,
 				idempotencyKey: alert?.idempotencyKeysByChannel?.[chName] || options.idempotencyKey,
@@ -1123,14 +1165,20 @@ class NotificationManager {
 
 		this._recordDeliveryMetrics(formattedResults, totalDurationMs);
 
-		console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
+		// Merge in any SNOOZED results for channels we short-circuited before dispatch.
+		const finalResults = snoozedResults.length > 0
+			? [...snoozedResults, ...formattedResults]
+			: formattedResults;
+
+		console.info('[NotificationManager] Delivery results:', JSON.stringify(finalResults.map(r => ({
 			channel: r ? r.channel : 'unknown',
 			success: r ? r.success : false,
+			category: r ? r.category : undefined,
 			messageId: r ? r.messageId : undefined,
 			error: r ? r.error : undefined,
 		}))));
 
-		return formattedResults;
+		return finalResults;
 	}
 
 	async _evaluateChatPreferences(channel, alert, options = {}) {

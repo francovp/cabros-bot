@@ -236,6 +236,7 @@ describe('OpenAPI contract', () => {
 			'POST /api/admin/test-alert', 'GET /api/admin/events',
 			'GET /api/preferences/{channel}/{chatId}', 'PUT /api/preferences/{channel}/{chatId}', 'DELETE /api/preferences/{channel}/{chatId}',
 			'GET /api/selftest', 'POST /api/selftest/run',
+			'GET /api/ops/snooze', 'POST /api/ops/snooze', 'DELETE /api/ops/snooze',
 		]);
 
 		const unauthenticatedOperations = new Set([

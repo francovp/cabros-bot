@@ -56,6 +56,7 @@ const { getPromptService } = require('../services/prompts');
 const { promptDriftService } = require('../services/prompts/PromptDriftService');
 const { signalClassMetrics } = require('../services/alerts/signalClassifier');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
+const { snoozeService } = require('../services/notification/SnoozeService');
 const { globalAlertBudget } = require('../services/notifications/globalAlertBudget');
 const { adminPagingDeduplicator } = require('../services/notification/adminPagingDeduplicator');
 const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsAppService');
@@ -903,6 +904,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 				heartbeat: signalOutcomeHeartbeat,
 			},
 			notificationRedrive: notificationRedriveService.getStatus({ skipTelemetrySync }),
+			snooze: snoozeService.getStatus(),
 			alertSignalRepeatSuppression: {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
