@@ -3,6 +3,7 @@ const alertStorageService = require('../../src/services/storage/AlertStorageServ
 const { signalRepeatCooldown } = require('../../src/services/alerts/signalRepeatCooldown');
 const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 const { getBackgroundTimerStats } = require('../../src/lib/backgroundTimerRegistry');
+const { snoozeService } = require('../../src/services/notification/SnoozeService');
 const admin = require('firebase-admin');
 
 describe('NotificationRedriveService', () => {
@@ -135,6 +136,7 @@ describe('NotificationRedriveService', () => {
 	});
 
 	afterEach(async () => {
+		snoozeService.resetForTesting();
 		if (service) {
 			await service.stopWorker({ drain: false });
 			service._resetForTesting();
@@ -1506,6 +1508,71 @@ describe('NotificationRedriveService', () => {
 
 			expect(service.getPendingCount()).toBe(0);
 			expect(service.totalDeliveredCount).toBe(1);
+		});
+
+		it('defers redrive sweeps while candidate channel is snoozed without consuming retries', async () => {
+			snoozeService.activate({ durationMs: 1800000, channels: ['telegram'] });
+
+			const mockTelegramSend = jest.fn();
+			const mockNotificationManager = {
+				channels: new Map([
+					['telegram', { name: 'telegram', send: mockTelegramSend, isEnabled: () => true }],
+				]),
+				sendToChannels: jest.fn(),
+			};
+			service.setNotificationManagerGetter(() => mockNotificationManager);
+
+			const alert = { text: 'BTC signal', correlationId: 'corr-snooze-1', telegramChatId: '12345' };
+			const results = [{ channel: 'telegram', success: false, error: 'Rate limit' }];
+			await service.recordDeliveryResults(alert, results);
+
+			const item = service.inMemoryStore.get('corr-snooze-1_telegram');
+			item.nextAttemptAt = Date.now() - 1000;
+			expect(service.getPendingCount()).toBe(1);
+
+			const sweepResult = await service.sweep();
+			expect(sweepResult.scanned).toBe(1);
+			expect(sweepResult.redriven).toBe(0);
+			expect(mockTelegramSend).not.toHaveBeenCalled();
+			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+
+			// Attempt count is NOT incremented; record is held for expiry
+			expect(item.attemptCount).toBe(0);
+			expect(service.getPendingCount()).toBe(1);
+		});
+
+		it('holds snoozed redrives until expiry when dispatch returns SNOOZED without incrementing attemptCount', async () => {
+			snoozeService.activate({ durationMs: 1800000, channels: ['telegram'] });
+
+			const mockNotificationManager = {
+				channels: new Map([
+					['telegram', { name: 'telegram', send: jest.fn(), isEnabled: () => true }],
+				]),
+				sendToChannels: jest.fn().mockResolvedValue([
+					{
+						channel: 'telegram',
+						success: false,
+						category: 'SNOOZED',
+						snoozedUntil: new Date(Date.now() + 1800000).toISOString(),
+						error: 'Notification channel is currently snoozed by operator',
+					},
+				]),
+			};
+			service.setNotificationManagerGetter(() => mockNotificationManager);
+
+			const alert = { text: 'ETH signal', correlationId: 'corr-snooze-2', telegramChatId: '12345' };
+			const results = [{ channel: 'telegram', success: false, error: 'Initial failure' }];
+			await service.recordDeliveryResults(alert, results);
+
+			const item = service.inMemoryStore.get('corr-snooze-2_telegram');
+			item.nextAttemptAt = Date.now() - 1000;
+			item.attemptCount = 4; // already at 4 attempts (max is 5)
+
+			const sweepResult = await service.sweep();
+			// Attempt count must not be incremented to 5, so it is NOT exhausted!
+			expect(item.attemptCount).toBe(4);
+			expect(item.status).toBe('pending');
+			expect(service.totalExhaustedCount).toBe(0);
 		});
 
 		it('aborts an in-flight redrive when the signal is superseded', async () => {

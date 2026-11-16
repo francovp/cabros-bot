@@ -175,8 +175,8 @@ class SnoozeService {
 		}
 		return {
 			active: true,
-			activatedAt: new Date(snapshot.activatedAt).toISOString(),
-			expiresAt: new Date(snapshot.expiresAt).toISOString(),
+			activatedAt: typeof snapshot.activatedAt === 'string' ? snapshot.activatedAt : new Date(snapshot.activatedAt).toISOString(),
+			expiresAt: typeof snapshot.expiresAt === 'string' ? snapshot.expiresAt : new Date(snapshot.expiresAt).toISOString(),
 			reason: snapshot.reason || null,
 			channels: snapshot.channels.slice(),
 		};
@@ -225,12 +225,13 @@ class SnoozeService {
 			return null;
 		}
 		return {
-			activatedAt: this._active.activatedAt,
-			expiresAt: this._active.expiresAt,
+			active: true,
+			activatedAt: new Date(this._active.activatedAt).toISOString(),
+			expiresAt: new Date(this._active.expiresAt).toISOString(),
 			durationMs: this._active.durationMs,
-			reason: this._active.reason,
+			reason: this._active.reason || null,
 			channels: this._active.channels.slice(),
-			actorIp: this._active.actorIp,
+			actorIp: this._active.actorIp || null,
 		};
 	}
 

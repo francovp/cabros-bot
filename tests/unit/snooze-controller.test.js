@@ -33,14 +33,19 @@ describe('SnoozeController', () => {
 			expect(res.json).toHaveBeenCalledWith({ active: false });
 		});
 
-		it('returns the active snooze', () => {
+		it('returns the active snooze serialized to published schema', () => {
 			snoozeService.activate({ durationMs: 60_000, reason: 'test' });
 			const req = {};
 			const res = mockRes();
 			getSnooze(req, res);
 			expect(res.status).toHaveBeenCalledWith(200);
 			const body = res.json.mock.calls[0][0];
+			expect(body.active).toBe(true);
 			expect(body.reason).toBe('test');
+			expect(typeof body.activatedAt).toBe('string');
+			expect(typeof body.expiresAt).toBe('string');
+			expect(new Date(body.activatedAt).toISOString()).toBe(body.activatedAt);
+			expect(new Date(body.expiresAt).toISOString()).toBe(body.expiresAt);
 		});
 	});
 
@@ -67,6 +72,39 @@ describe('SnoozeController', () => {
 			postSnooze(req, res);
 			expect(res.status).toHaveBeenCalledWith(400);
 			expect(res.json.mock.calls[0][0].code).toBe('INVALID_DURATION');
+		});
+
+		it('returns standardized error envelope for invalid requests', () => {
+			const req = { body: { durationMs: 1000 }, headers: { 'x-request-id': 'req-snooze-test' } };
+			const res = mockRes();
+			postSnooze(req, res);
+			expect(res.status).toHaveBeenCalledWith(400);
+			const body = res.json.mock.calls[0][0];
+			expect(body).toEqual({
+				success: false,
+				error: expect.stringContaining('durationMs must be between'),
+				code: 'INVALID_DURATION',
+				requestId: 'req-snooze-test',
+				retryable: false,
+			});
+		});
+
+		it('rejects non-array channels with INVALID_CHANNELS and standardized error envelope', () => {
+			const req = {
+				body: { durationMs: 60_000, channels: 'telegram' },
+				headers: { 'x-request-id': 'req-invalid-channels' },
+			};
+			const res = mockRes();
+			postSnooze(req, res);
+			expect(res.status).toHaveBeenCalledWith(400);
+			const body = res.json.mock.calls[0][0];
+			expect(body).toEqual({
+				success: false,
+				error: 'channels must be an array of channel names',
+				code: 'INVALID_CHANNELS',
+				requestId: 'req-invalid-channels',
+				retryable: false,
+			});
 		});
 
 		it('accepts a valid duration and returns the active snooze', () => {

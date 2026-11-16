@@ -9,6 +9,7 @@ const { fireAndForget } = require('../../lib/fireAndForget');
 const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
 const { signalRepeatCooldown, nextMonotonicGeneration } = require('../alerts/signalRepeatCooldown');
+const { snoozeService } = require('./SnoozeService');
 
 const COLLECTION_NAME = 'notificationDeadLetters';
 const DEFAULT_REDRIVE_INTERVAL_MS = 60000;
@@ -954,11 +955,11 @@ class NotificationRedriveService {
 		return true;
 	}
 
-	async markRetry(recordId, attemptCount, lastError, lastStatusCode, chunkResume) {
+	async markRetry(recordId, attemptCount, lastError, lastStatusCode, chunkResume, options = {}) {
 		const nowMs = Date.now();
 		const nowDate = new Date(nowMs);
 		const backoffMs = calculateBackoffMs(attemptCount);
-		const nextAttemptAtDate = new Date(nowMs + backoffMs);
+		const nextAttemptAtDate = options.nextAttemptAtDate || new Date(nowMs + backoffMs);
 
 		const updateData = {
 			status: 'pending',
@@ -1434,6 +1435,12 @@ class NotificationRedriveService {
 					break;
 				}
 
+				// Defer redrive attempts while their channel is snoozed without consuming retries
+				if (snoozeService && typeof snoozeService.isSnoozed === 'function' && snoozeService.isSnoozed(candidate.channel)) {
+					console.debug('[NotificationRedriveService] Deferring redrive sweep for snoozed channel %s (record %s)', candidate.channel, candidate.id);
+					continue;
+				}
+
 				// Check budget expiration
 				if (candidate.expired || candidate.attemptCount >= maxAttempts) {
 					const terminalStatus = candidate.expired ? 'expired' : 'exhausted';
@@ -1543,6 +1550,17 @@ class NotificationRedriveService {
 						} else {
 							errorCount += 1;
 						}
+					} else if (channelResult && channelResult.category === 'SNOOZED') {
+						const activeSnooze = typeof snoozeService?.getActive === 'function' ? snoozeService.getActive() : null;
+						const snoozeExpiresAt = activeSnooze?.expiresAt ? new Date(activeSnooze.expiresAt) : new Date(Date.now() + 60000);
+						await this.markRetry(
+							claimed.id,
+							claimed.attemptCount || 0,
+							channelResult.error || 'Channel is currently snoozed by operator',
+							null,
+							claimed.chunkResume,
+							{ nextAttemptAtDate: snoozeExpiresAt },
+						);
 					} else {
 						// Delivery failed again
 						const nextAttempts = (claimed.attemptCount || 0) + 1;
