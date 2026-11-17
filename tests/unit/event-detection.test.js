@@ -9,6 +9,7 @@ const {
 	calibrateNewsConfidence,
 } = require('../../src/services/grounding/gemini');
 const { EventCategory } = require('../../src/controllers/webhooks/handlers/newsMonitor/constants');
+const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
 jest.mock('../../src/services/grounding/genaiClient');
 
@@ -296,6 +297,69 @@ Some text after...`;
 			genaiClient.llmCallv2.mockRejectedValue(new Error('API error'));
 
 			await expect(analyzeNewsForSymbol('BTCUSDT', 'Context')).rejects.toThrow('API error');
+		});
+
+		it('does not retry a published Gemini model when another LLM provider is selected', async () => {
+			const keys = [
+				'ENABLE_FIREBASE_REMOTE_CONFIG',
+				'MODEL_PROVIDER',
+				'GEMINI_MODEL_NAME',
+			];
+			const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			process.env.MODEL_PROVIDER = 'azure';
+			delete process.env.GEMINI_MODEL_NAME;
+			remoteConfigService._setRemoteOverridesForTesting({
+				GEMINI_MODEL_NAME: 'published-primary-model',
+				GEMINI_MODEL_NAME_FALLBACK: 'published-fallback-model',
+			});
+			genaiClient.llmCallv2.mockRejectedValue(new Error('LLM call failed: 503 UNAVAILABLE'));
+
+			try {
+				await expect(analyzeNewsForSymbol('BTCUSDT', 'Context'))
+					.rejects.toThrow('503 UNAVAILABLE');
+				expect(genaiClient.llmCallv2).toHaveBeenCalledTimes(1);
+			} finally {
+				remoteConfigService._resetForTesting();
+				for (const [key, value] of Object.entries(previous)) {
+					if (value === undefined) {
+						delete process.env[key];
+					} else {
+						process.env[key] = value;
+					}
+				}
+			}
+		});
+
+		it('should fail open to neutral analysis when llmCallv2 throws TOKEN_BUDGET_EXCEEDED code', async () => {
+			const budgetError = new Error('Daily token cost budget exceeded');
+			budgetError.code = 'TOKEN_BUDGET_EXCEEDED';
+			budgetError.status = 429;
+			genaiClient.llmCallv2.mockRejectedValue(budgetError);
+
+			const result = await analyzeNewsForSymbol('BTCUSDT', 'Context');
+
+			expect(result).toBeDefined();
+			expect(result.event_category).toBe(EventCategory.NONE);
+			expect(result.event_significance).toBe(0);
+			expect(result.sentiment_score).toBe(0);
+			expect(result.confidence).toBe(0);
+			expect(result.headline).toBe('Token cost budget ceiling reached');
+			expect(result.description).toBe('Skipping news analysis due to daily token cost budget ceiling.');
+			expect(result.promptVersion).toBe('fallback-budget');
+			expect(result.sources).toEqual([]);
+			expect(result.budgetExceeded).toBe(true);
+		});
+
+		it('should fail open to neutral analysis when llmCallv2 throws message containing TOKEN_BUDGET_EXCEEDED', async () => {
+			const budgetError = new Error('TOKEN_BUDGET_EXCEEDED: Daily LLM token cost budget exceeded');
+			genaiClient.llmCallv2.mockRejectedValue(budgetError);
+
+			const result = await analyzeNewsForSymbol('BTCUSDT', 'Context');
+
+			expect(result).toBeDefined();
+			expect(result.event_category).toBe(EventCategory.NONE);
+			expect(result.budgetExceeded).toBe(true);
 		});
 
 		it('should handle fallback when Gemini response cannot be parsed', async () => {
@@ -833,6 +897,256 @@ Some text after...`;
 				effective_source_count: 2,
 			});
 			expect(Array.isArray(result.calibration.actual_source_domains)).toBe(true);
+		});
+	});
+
+	// Issue #1230: domainQuality tier scores must feed back into
+	// calibrateNewsConfidence so blog-spam evidence cannot clear
+	// NEWS_ALERT_THRESHOLD on source count alone.
+	describe('calibrateNewsConfidence domain quality tier penalty (issue #1230)', () => {
+		const NOW = new Date('2026-09-28T12:00:00Z');
+		const FRESH = new Date(NOW.getTime() - (2 * 60 * 60 * 1000)).toISOString();
+		const STALE = new Date(NOW.getTime() - (10 * 24 * 60 * 60 * 1000)).toISOString();
+
+		const makeSource = (domain, publishedAt = FRESH) => ({
+			title: 'T',
+			snippet: '',
+			url: `https://${domain}/a`,
+			sourceDomain: domain,
+			publishedAt,
+		});
+
+		const STRONG_SIGNAL = {
+			event_significance: 0.9,
+			sentiment_score: 0.8,
+			source_count: 3,
+			source_freshness: 0.9,
+			source_quality: 0.9,
+			uncertainty_reason: '',
+			invalidation_hint: '',
+		};
+
+		const NO_DOMAIN_SOURCES = [
+			{ title: 'a' },
+			{ title: 'b' },
+			{ title: 'c' },
+		];
+
+		it('returns a lower confidence for LOW quality tiers at identical signal inputs', () => {
+			const reputable = calibrateNewsConfidence(STRONG_SIGNAL, [
+				makeSource('reuters.com'),
+				makeSource('bloomberg.com'),
+				makeSource('coindesk.com'),
+			], { now: NOW });
+			const blogSpam = calibrateNewsConfidence(STRONG_SIGNAL, [
+				makeSource('alpha-spam.blog'),
+				makeSource('beta-pump.buzz'),
+				makeSource('gamma-click.xyz'),
+			], { now: NOW });
+
+			expect(blogSpam.confidence).toBeLessThan(reputable.confidence);
+			expect(blogSpam.confidence).toBeCloseTo(0.646, 6);
+		});
+
+		it('does not penalize UNKNOWN quality tiers, which only mean "not in the classification lists"', () => {
+			// `unknown` is the modal outcome for most real outlets: only ~56 domains
+			// are enumerated. Penalizing it would mean adding one extra reputable
+			// source (here: a Reuters+Bloomberg set plus an unlisted outlet) LOWERS
+			// confidence and can push a genuine alert under the threshold.
+			const twoSources = calibrateNewsConfidence(STRONG_SIGNAL, [
+				makeSource('reuters.com'),
+				makeSource('bloomberg.com'),
+			], { now: NOW });
+			const threeSources = calibrateNewsConfidence(STRONG_SIGNAL, [
+				makeSource('reuters.com'),
+				makeSource('bloomberg.com'),
+				makeSource('investing.com'),
+			], { now: NOW });
+
+			// Adding a legitimate third source must not reduce confidence.
+			expect(threeSources.confidence).toBeGreaterThanOrEqual(twoSources.confidence);
+			expect(threeSources.calibration.qualityPenalty).toBe(1);
+			expect(threeSources.confidence).toBeCloseTo(0.86, 6);
+		});
+
+		it('still penalizes a genuinely LOW tier even when HIGH and UNKNOWN sources are present', () => {
+			const result = calibrateNewsConfidence(STRONG_SIGNAL, [
+				makeSource('reuters.com'),
+				makeSource('bloomberg.com'),
+				makeSource('medium.com'),
+			], { now: NOW });
+
+			expect(result.calibration.qualityTier).toBe('low');
+			expect(result.calibration.qualityPenalty).toBe(0.85);
+		});
+
+		it('returns a lower confidence for MEDIUM quality tiers at identical signal inputs', () => {
+			const reputable = calibrateNewsConfidence(STRONG_SIGNAL, [
+				makeSource('reuters.com'),
+				makeSource('bloomberg.com'),
+				makeSource('coindesk.com'),
+			], { now: NOW });
+			const medium = calibrateNewsConfidence(STRONG_SIGNAL, [
+				makeSource('forbes.com'),
+				makeSource('investopedia.com'),
+				makeSource('marketwatch.com'),
+			], { now: NOW });
+
+			expect(medium.confidence).toBeLessThan(reputable.confidence);
+			expect(medium.calibration.qualityTier).toBe('medium');
+		});
+
+		it('applies no penalty for the HIGH quality tier', () => {
+			const result = calibrateNewsConfidence(STRONG_SIGNAL, [
+				makeSource('reuters.com'),
+				makeSource('bloomberg.com'),
+				makeSource('coindesk.com'),
+			], { now: NOW });
+
+			expect(result.confidence).toBeCloseTo(0.86, 6);
+			expect(result.calibration.qualityTier).toBe('high');
+			expect(result.calibration.qualityPenalty).toBe(1);
+		});
+
+		it('classifies a mixed source set by its weakest tier', () => {
+			const result = calibrateNewsConfidence(STRONG_SIGNAL, [
+				makeSource('reuters.com'),
+				makeSource('alpha-spam.blog'),
+				makeSource('beta-pump.buzz'),
+			], { now: NOW });
+
+			expect(result.calibration.qualityTier).toBe('low');
+			expect(result.calibration.actual_quality_tiers.high).toBe(1);
+			expect(result.calibration.actual_quality_tiers.low).toBe(2);
+		});
+
+		it('exposes qualityTier and qualityPenalty on the calibration object', () => {
+			const low = calibrateNewsConfidence(STRONG_SIGNAL, [makeSource('alpha-spam.blog')], { now: NOW });
+			expect(low.calibration).toHaveProperty('qualityTier', 'low');
+			expect(low.calibration).toHaveProperty('qualityPenalty', 0.85);
+
+			// `unknown` is reported for auditing but applies no penalty.
+			const unknown = calibrateNewsConfidence(STRONG_SIGNAL, [{}], { now: NOW });
+			expect(unknown.calibration).toHaveProperty('qualityTier', 'unknown');
+			expect(unknown.calibration).toHaveProperty('qualityPenalty', 1);
+		});
+
+		it('is a no-op when grounding sources are absent (model-only path)', () => {
+			const result = calibrateNewsConfidence(STRONG_SIGNAL, null, { now: NOW });
+
+			expect(result.confidence).toBeCloseTo(0.86, 6);
+			expect(result.calibration.qualityTier).toBeNull();
+			expect(result.calibration.qualityPenalty).toBe(1);
+		});
+
+		it('is a no-op when grounding returned zero sources (count penalty already applies)', () => {
+			const result = calibrateNewsConfidence(STRONG_SIGNAL, [], { now: NOW });
+
+			expect(result.confidence).toBeCloseTo(0.21, 6);
+			expect(result.calibration.qualityTier).toBeNull();
+			expect(result.calibration.qualityPenalty).toBe(1);
+		});
+
+		it('explains the quality penalty in confidence_reason for operator auditing', () => {
+			const result = calibrateNewsConfidence(STRONG_SIGNAL, [makeSource('alpha-spam.blog')], { now: NOW });
+
+			expect(result.confidence_reason).toMatch(/quality tier/i);
+			expect(result.confidence_reason).toMatch(/low/);
+		});
+
+		it('fails open (no penalty) when domainQuality throws', () => {
+			const domainQuality = require('../../src/services/grounding/domainQuality');
+			const spy = jest.spyOn(domainQuality, 'scoreQuality').mockImplementation(() => {
+				throw new Error('classifier exploded');
+			});
+
+			try {
+				const result = calibrateNewsConfidence(STRONG_SIGNAL, [makeSource('alpha-spam.blog')], { now: NOW });
+
+				// Grounding derivation is discarded, so calibration falls back to
+				// the model-emitted metadata and applies no quality penalty.
+				expect(result.calibration.grounding_used).toBe(false);
+				expect(result.calibration.qualityTier).toBeNull();
+				expect(result.calibration.qualityPenalty).toBe(1);
+				expect(result.confidence).toBeCloseTo(0.86, 6);
+			} finally {
+				spy.mockRestore();
+			}
+		});
+
+		/**
+		 * Safety property: this is a false-positive REDUCTION feature. The
+		 * calibrated result must never exceed the pre-change value. The oracle
+		 * below is the confidence produced by the pre-#1230 implementation for
+		 * the exact same inputs.
+		 */
+		it('never produces a higher score than the pre-change implementation', () => {
+			const monotonicityMatrix = [
+				['no-grounding-model-metadata', STRONG_SIGNAL, null, 0.86],
+				['empty-grounding-list', STRONG_SIGNAL, [], 0.21],
+				['three-fresh-high-tier', STRONG_SIGNAL, [
+					makeSource('reuters.com'), makeSource('bloomberg.com'), makeSource('coindesk.com'),
+				], 0.86],
+				['three-fresh-low-tier', STRONG_SIGNAL, [
+					makeSource('alpha-spam.blog'), makeSource('beta-pump.buzz'), makeSource('gamma-click.xyz'),
+				], 0.76],
+				['three-fresh-unknown-tier', STRONG_SIGNAL, NO_DOMAIN_SOURCES, 0.64],
+				['single-fresh-low-tier-with-uncertainty', {
+					event_significance: 0.85, sentiment_score: 0.7, source_count: 1,
+					source_freshness: 0.9, source_quality: 0.5,
+					uncertainty_reason: 'conflicting signals', invalidation_hint: '',
+				}, [makeSource('rumors.blog')], 0.44],
+				['three-stale-low-tier', {
+					event_significance: 0.9, sentiment_score: -0.8, source_count: 3,
+					source_freshness: 0.9, source_quality: 0.9,
+					uncertainty_reason: '', invalidation_hint: '',
+				}, [
+					makeSource('alpha-spam.blog', STALE),
+					makeSource('beta-pump.buzz', STALE),
+					makeSource('gamma-click.xyz', STALE),
+				], 0.61],
+				['zero-signal-empty-grounding', {
+					event_significance: 0, sentiment_score: 0, source_count: 0,
+					source_freshness: 0, source_quality: 0,
+					uncertainty_reason: 'no reliable data', invalidation_hint: 'uncertain',
+				}, [], 0],
+				['weak-signal-low-tier', {
+					event_significance: 0.55, sentiment_score: 0.6, source_count: 3,
+					source_freshness: 0.9, source_quality: 0.9,
+					uncertainty_reason: '', invalidation_hint: '',
+				}, [
+					makeSource('alpha-spam.blog'), makeSource('beta-pump.buzz'), makeSource('gamma-click.xyz'),
+				], 0.47],
+				['max-signal-high-tier', {
+					event_significance: 1.0, sentiment_score: 1.0, source_count: 5,
+					source_freshness: 1, source_quality: 1,
+					uncertainty_reason: '', invalidation_hint: '',
+				}, [makeSource('reuters.com'), makeSource('sec.gov'), makeSource('fca.org.uk')], 1],
+				['out-of-range-signal-low-tier', {
+					event_significance: 2, sentiment_score: 2, source_count: 10,
+					source_freshness: 1, source_quality: 1,
+					uncertainty_reason: '', invalidation_hint: '',
+				}, [makeSource('alpha-spam.blog'), makeSource('beta-pump.buzz')], 1],
+				['three-mixed-tier', {
+					event_significance: 0.8, sentiment_score: 0.75, source_count: 3,
+					source_freshness: 0.9, source_quality: 0.9,
+					uncertainty_reason: '', invalidation_hint: '',
+				}, [
+					makeSource('reuters.com'), makeSource('alpha-spam.blog'), makeSource('unknown-blog.buzz'),
+				], 0.68],
+			];
+
+			for (const [name, analysis, sources, previousConfidence] of monotonicityMatrix) {
+				const result = calibrateNewsConfidence({ ...analysis }, sources, { now: NOW });
+
+				expect({ name, confidence: result.confidence, previousConfidence })
+					.toEqual({ name, confidence: result.confidence, previousConfidence });
+				// 1e-9 tolerance absorbs IEEE-754 rounding noise only; a real
+				// regression (any score inflation) exceeds it by far.
+				expect(result.confidence).toBeLessThanOrEqual(previousConfidence + 1e-9);
+				expect(result.confidence).toBeGreaterThanOrEqual(0);
+				expect(result.confidence).toBeLessThanOrEqual(1);
+			}
 		});
 	});
 });

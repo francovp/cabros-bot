@@ -1,0 +1,73 @@
+name: External Uptime Watchdog
+
+# Watches the watcher (issue #1107).
+#
+# The External Uptime Monitor can fail in a way GitHub cannot report: if the
+# workflow stops being scheduled — a disabled workflow, a repository-wide Actions
+# outage, a cron silently dropped after prolonged repository inactivity — no run
+# exists, so no failed-workflow notification is ever sent, and the monitor is
+# blind for exactly as long as nobody notices. That is the same shape of blind
+# spot as the six-day outage this monitor was created to close.
+#
+# This workflow therefore asserts one thing only: that the monitor ran recently
+# and its latest completed run is visible.
+#
+# It deliberately does NOT fail when the monitor's latest conclusion is
+# `failure`. A failing monitor is already reported twice over (the failed
+# scheduled run notification and, on transition, the admin chat page), and this
+# job would only add a third duplicate every fifteen minutes.
+#
+# Configuration — repository variables (both optional):
+#   UPTIME_WATCHDOG_MAX_AGE_MINUTES  how stale the last monitor run may be
+#                                   (default: 30; the monitor runs every 5)
+
+on:
+  schedule:
+    # Deliberately offset from the monitor's `*/5` phase so a systematically
+    # delayed monitor is still observed rather than sampled in lockstep.
+    - cron: '3,18,33,48 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  # No checkout on purpose: this job reads run metadata only, so it keeps working
+  # even when the repository contents or the monitor script are broken.
+  actions: read
+  contents: read
+
+jobs:
+  watchdog:
+    name: Assert the uptime monitor is running
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Assert the monitor produced a recent completed run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MAX_AGE_MINUTES: ${{ vars.UPTIME_WATCHDOG_MAX_AGE_MINUTES || '30' }}
+        run: |
+          set -euo pipefail
+          runs_json="$(gh api "repos/${{ github.repository }}/actions/workflows/external-uptime-monitor.yml/runs?per_page=1")"
+          run_url="$(printf '%s' "$runs_json" | jq -r '.workflow_runs[0].html_url // empty')"
+          created_at="$(printf '%s' "$runs_json" | jq -r '.workflow_runs[0].created_at // empty')"
+          conclusion="$(printf '%s' "$runs_json" | jq -r '.workflow_runs[0].status // "none"')"
+
+          {
+            echo "### External uptime watchdog"
+            echo
+            echo "Monitor last run: ${created_at:-unknown} (${conclusion})"
+            echo "Run: ${run_url:-none}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ -z "$created_at" ]]; then
+            echo "::error::No External Uptime Monitor run has ever been recorded. The monitor is not scheduled."
+            exit 1
+          fi
+
+          age_minutes=$(( ( $(date -u +%s) - $(date -u -d "$created_at" +%s) ) / 60 ))
+          if (( age_minutes > MAX_AGE_MINUTES )); then
+            echo "::error::Last External Uptime Monitor run is ${age_minutes} minutes old (limit ${MAX_AGE_MINUTES}). Monitoring is stale."
+            exit 1
+          fi
+
+          echo "Last External Uptime Monitor run is ${age_minutes} minutes old."

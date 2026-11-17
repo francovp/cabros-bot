@@ -109,6 +109,7 @@ const { nodeProfilingIntegration } = require('@sentry/profiling-node');
 const FEATURE_NAMES = {
 	'http-alert': 'alerts',
 	'news-monitor': 'news-monitor',
+	'market-scanner': 'market-scanner',
 	'telegram': 'telegram-alerts',
 	'whatsapp': 'whatsapp-alerts',
 	'discord': 'discord-alerts',
@@ -118,7 +119,7 @@ const FEATURE_NAMES = {
 };
 
 const {
-	getDeploymentCommit,
+	getDeploymentIdentity,
 	getDeploymentRepoSlug,
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
@@ -176,7 +177,7 @@ class SentryService {
 			return process.env.SENTRY_RELEASE;
 		}
 
-		const deploymentCommit = getDeploymentCommit();
+		const deploymentCommit = getDeploymentIdentity().gitSha;
 		if (deploymentCommit) {
 			const shortCommit = deploymentCommit.substring(0, 7);
 			const repoSlug = getDeploymentRepoSlug();
@@ -256,8 +257,8 @@ class SentryService {
 		const dsn = process.env.SENTRY_DSN || undefined;
 		const enabled = process.env.ENABLE_SENTRY === 'true' && !!dsn;
 		const tracesSampleRate = this._parseOptionalSampleRate(process.env.SENTRY_TRACES_SAMPLE_RATE);
-		// Profiling requires tracing; only parse profile rate when tracing is enabled
-		const profileSessionSampleRate = tracesSampleRate !== undefined
+		// Profiling requires active tracing; a zero trace rate disables it.
+		const profileSessionSampleRate = tracesSampleRate > 0
 			? this._parseOptionalSampleRate(process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE)
 			: undefined;
 
@@ -313,8 +314,8 @@ class SentryService {
 					const extra = [Sentry.consoleLoggingIntegration({ levels: this.config.consoleLogLevels })];
 					// Add profiling integration only when tracing + profiling are both enabled
 					if (
-						this.config.tracesSampleRate !== undefined &&
-						this.config.profileSessionSampleRate !== undefined
+						this.config.tracesSampleRate > 0 &&
+						this.config.profileSessionSampleRate > 0
 					) {
 						extra.push(nodeProfilingIntegration());
 					}
@@ -335,8 +336,8 @@ class SentryService {
 
 			// Profiling: attach profileSessionSampleRate and profileLifecycle only when tracing is on
 			if (
-				this.config.tracesSampleRate !== undefined &&
-				this.config.profileSessionSampleRate !== undefined
+				this.config.tracesSampleRate > 0 &&
+				this.config.profileSessionSampleRate > 0
 			) {
 				initOptions.profileSessionSampleRate = this.config.profileSessionSampleRate;
 				initOptions.profileLifecycle = 'trace';
@@ -351,7 +352,7 @@ class SentryService {
 				lastInitError: undefined,
 			};
 
-			const profilingStatus = this.config.profileSessionSampleRate !== undefined
+			const profilingStatus = this.isProfilingEnabled()
 				? `enabled (rate=${this.config.profileSessionSampleRate})`
 				: 'disabled';
 			console.info(
@@ -380,7 +381,9 @@ class SentryService {
 	 * @returns {boolean}
 	 */
 	isTracingEnabled() {
-		return this.state.enabled && !!this.config && this.config.tracesSampleRate !== undefined;
+		return this.state.enabled && !!this.config
+			&& this.config.tracesSampleRate !== undefined
+			&& this.config.tracesSampleRate > 0;
 	}
 
 	/**
@@ -388,7 +391,9 @@ class SentryService {
 	 * @returns {boolean}
 	 */
 	isProfilingEnabled() {
-		return this.isTracingEnabled() && !!this.config && this.config.profileSessionSampleRate !== undefined;
+		return this.isTracingEnabled() && !!this.config
+			&& this.config.profileSessionSampleRate !== undefined
+			&& this.config.profileSessionSampleRate > 0;
 	}
 
 	/**
@@ -397,6 +402,48 @@ class SentryService {
 	 */
 	getState() {
 		return { ...this.state };
+	}
+
+	/**
+	 * Get non-secret effective runtime settings for the protected status endpoint.
+	 * DSN credentials, path prefixes, and query parameters are deliberately omitted.
+	 * @returns {{initialized: boolean, environment: string|null, release: string|null, tracesSampleRate: number|null, tracingEnabled: boolean, dsnRouting: {configured: boolean, host: string|null, projectId: string|null}}}
+	 */
+	getRuntimeDiagnostics() {
+		const config = this.config;
+		const dsnRouting = {
+			configured: Boolean(config && config.dsn),
+			host: null,
+			projectId: null,
+		};
+
+		if (dsnRouting.configured) {
+			try {
+				const parsedDsn = new URL(config.dsn);
+				const lastPathSegment = parsedDsn.pathname.split('/').filter(Boolean).pop();
+				if (['http:', 'https:'].includes(parsedDsn.protocol)) {
+					dsnRouting.host = parsedDsn.host || null;
+					dsnRouting.projectId = lastPathSegment && /^\d+$/.test(lastPathSegment)
+						? lastPathSegment
+						: null;
+				}
+			} catch {
+				// Keep malformed DSNs out of status while still showing that a value was configured.
+			}
+		}
+
+		const tracesSampleRate = config && config.tracesSampleRate !== undefined
+			? config.tracesSampleRate
+			: null;
+
+		return {
+			initialized: this.state.enabled,
+			environment: config ? config.environment : null,
+			release: config && config.release ? config.release : null,
+			tracesSampleRate,
+			tracingEnabled: this.state.enabled && tracesSampleRate !== null && tracesSampleRate > 0,
+			dsnRouting,
+		};
 	}
 
 	/**
@@ -657,12 +704,14 @@ class SentryService {
 						status_code: String(event.http.statusCode),
 						http_category: `${Math.floor(Number(event.http.statusCode) / 100)}xx`,
 					}),
+					...(event.http.requestId && { request_id: String(event.http.requestId) }),
 				}),
 				...(event.external && {
 					provider: event.external.provider,
 					...(event.external.lastErrorCode && { provider_status_code: String(event.external.lastErrorCode) }),
 				}),
 				...(event.extra && event.extra.category && { category: String(event.extra.category) }),
+				...(event.extra && event.extra.requestId && { request_id: String(event.extra.requestId) }),
 				...(spanContext && {
 					trace_id: spanContext.traceId,
 					span_id: spanContext.spanId,
@@ -712,6 +761,44 @@ class SentryService {
 		} catch (error) {
 			// Never throw - monitoring failures should not affect application behavior
 			console.warn(`[SentryService] Failed to capture event: ${error.message}`);
+			return {
+				captured: false,
+				skippedReason: `Capture error: ${error.message}`,
+			};
+		}
+	}
+
+	/**
+	 * Capture a sanitized informational event without treating it as an error.
+	 * @param {{message: string, feature?: string, extra?: Object<string, unknown>}} request
+	 * @returns {MonitoringCaptureResult}
+	 */
+	captureInfo(request = {}) {
+		try {
+			if (!this.state.enabled) {
+				return {
+					captured: false,
+					skippedReason: this.state.lastInitError || 'Monitoring disabled',
+				};
+			}
+
+			const message = this._sanitizeString(String(request.message || 'process.info'));
+			const feature = this._sanitizeString(String(request.feature || 'process.info'));
+			const eventId = Sentry.captureMessage(message, {
+				level: 'info',
+				tags: {
+					channel: 'process',
+					feature,
+					environment: this.config?.environment || 'unknown',
+				},
+				extra: this._sanitizeObject(request.extra || {}),
+			});
+
+			console.debug(`[SentryService] Info captured: ${eventId} (feature=${feature})`);
+			return { captured: true, eventId };
+		} catch (error) {
+			// Monitoring failures must never affect shutdown or other application behavior.
+			console.warn(`[SentryService] Failed to capture info: ${error.message}`);
 			return {
 				captured: false,
 				skippedReason: `Capture error: ${error.message}`,
@@ -889,6 +976,29 @@ class SentryService {
 	}
 
 	/**
+	 * Capture Firestore write metric
+	 * @param {Object} params
+	 * @param {string} params.domain
+	 * @param {'success' | 'failure'} params.status
+	 */
+	captureFirestoreWriteMetric({ domain, status }) {
+		if (!this.state.enabled) return;
+		try {
+			const tags = {
+				domain: domain || 'unknown',
+				status: status === 'success' ? 'success' : 'failure',
+			};
+			if (Sentry.metrics && typeof Sentry.metrics.count === 'function') {
+				Sentry.metrics.count('firestore_writes', 1, { tags });
+			}
+		} catch (error) {
+			// Never throw - monitoring failures should not affect application behavior
+			console.warn(`[SentryService] Failed to capture Firestore write metric: ${error.message}`);
+		}
+	}
+
+
+	/**
 	 * Flush pending events (for graceful shutdown)
 	 * @param {number} [timeout=2000] - Timeout in milliseconds
 	 * @returns {Promise<boolean>}
@@ -926,3 +1036,21 @@ const sentryService = new SentryService();
 module.exports = sentryService;
 module.exports.SentryService = SentryService;
 module.exports.FEATURE_NAMES = FEATURE_NAMES;
+
+/**
+ * Single source of truth for the `SENTRY_SEND_ALERT_CONTENT` policy.
+ * Returns `true` when alert/news text should be included in Sentry events,
+ * `false` only when the operator explicitly sets `SENTRY_SEND_ALERT_CONTENT=false`.
+ * All other values (unset, empty, anything else) fall through to the
+ * documented default of `true` and match the README/.env.example contract.
+ * Consumers (e.g. `telegramErrorBoundary`) MUST go through this helper instead
+ * of re-reading `process.env.SENTRY_SEND_ALERT_CONTENT` directly, so the
+ * absent-state semantics stay aligned with the webhook/news SentryService
+ * configuration.
+ * @returns {boolean}
+ */
+function shouldSendAlertContent() {
+	return process.env.SENTRY_SEND_ALERT_CONTENT !== 'false';
+}
+
+module.exports.shouldSendAlertContent = shouldSendAlertContent;

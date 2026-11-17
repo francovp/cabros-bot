@@ -21,6 +21,10 @@ describe('NotificationChannel', () => {
 			expect(channel.enabled).toBe(false);
 		});
 
+		it('should return false for isConfigured() by default', () => {
+			expect(channel.isConfigured()).toBe(false);
+		});
+
 		it('should throw error when isEnabled() not implemented', () => {
 			expect(() => channel.isEnabled()).toThrow('isEnabled() must be implemented by subclass');
 		});

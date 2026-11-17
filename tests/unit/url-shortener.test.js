@@ -86,9 +86,89 @@ describe('URLShortener - Unit Tests', () => {
 		expect(urlShortener.configuredServices.length).toBeGreaterThan(0);
 	});
 
-	it('should have 10+ second timeout', () => {
-		// Default is 60s (60000ms), but configurable via URL_SHORTENER_TIMEOUT env var
-		expect(shortener.timeout).toBeGreaterThanOrEqual(10000);
+	it('uses a 5-second timeout for URL shortening', () => {
+		expect(shortener.timeout).toBe(5000);
+	});
+
+	it('aborts a stalled provider within the batch budget and skips later sources', async () => {
+		const batchTimeoutMs = 30;
+		shortener.primaryService = 'picsee';
+		shortener.configuredServices = ['cuttly'];
+		shortener.enabled = true;
+		shortener.timeout = batchTimeoutMs;
+		shortener.batchTimeoutMs = batchTimeoutMs;
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn((_url, options = {}) => new Promise((resolve, reject) => {
+			options.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+		}));
+
+		try {
+			const startedAt = Date.now();
+			const results = await shortener.shortenUrlsParallel([
+				'https://example.com/first',
+				'https://example.com/second',
+			]);
+
+			expect(results).toEqual({});
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+			expect(global.fetch.mock.calls[0][1].signal.aborted).toBe(true);
+			expect(Date.now() - startedAt).toBeLessThan(1000);
+		} finally {
+			global.fetch = originalFetch;
+		}
+	});
+
+	it('aborts a provider response whose body stalls after headers', async () => {
+		shortener.configuredServices = ['cuttly'];
+		shortener.timeout = 30;
+		const originalFetch = global.fetch;
+		let signal;
+		global.fetch = jest.fn((_url, options = {}) => {
+			signal = options.signal;
+			return Promise.resolve({
+				json: () => new Promise((resolve, reject) => {
+					signal.addEventListener('abort', () => reject(new Error('body aborted')), { once: true });
+				}),
+			});
+		});
+
+		try {
+			await expect(shortener.callShortenerAPI('https://example.com/body-stall', 'cuttly'))
+				.rejects.toThrow('URL shortening timeout');
+			expect(signal.aborted).toBe(true);
+		} finally {
+			global.fetch = originalFetch;
+		}
+	});
+
+	it('aborts provider shortening when the caller signal is cancelled', async () => {
+		shortener.primaryService = 'picsee';
+		shortener.configuredServices = ['cuttly', 'tinyurl'];
+		shortener.enabled = true;
+		shortener.timeout = 1000;
+		shortener.batchTimeoutMs = 1000;
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn((_url, options = {}) => new Promise((resolve, reject) => {
+			options.signal?.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+		}));
+		const controller = new AbortController();
+
+		try {
+			const startedAt = Date.now();
+			const shortening = shortener.shortenUrlsParallel(
+				['https://example.com/cancelled'],
+				{ signal: controller.signal },
+			);
+			await new Promise(setImmediate);
+			controller.abort(new Error('caller cancelled'));
+
+			await expect(shortening).resolves.toEqual({});
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+			expect(global.fetch.mock.calls[0][1].signal.aborted).toBe(true);
+			expect(Date.now() - startedAt).toBeLessThan(300);
+		} finally {
+			global.fetch = originalFetch;
+		}
 	});
 
 	it('should return null when all services are unavailable and shortening fails', async () => {
@@ -162,5 +242,48 @@ describe('URLShortener - Unit Tests', () => {
 
 		// Cache should have 1 entry
 		expect(shortener.cache.size()).toBe(1);
+	});
+
+	it('coalesces concurrent requests for the same URL', async () => {
+		const shortener = new URLShortener();
+		let resolveProviderCall;
+		const providerCall = new Promise((resolve) => {
+			resolveProviderCall = resolve;
+		});
+		const callShortenerAPI = jest.fn(() => providerCall);
+		shortener.callShortenerAPI = callShortenerAPI;
+		const url = 'https://example.com/concurrent-url';
+
+		const firstResult = shortener.shortenUrl(url);
+		const secondResult = shortener.shortenUrl(url);
+		resolveProviderCall('https://short.url/concurrent');
+
+		await expect(Promise.all([firstResult, secondResult])).resolves.toEqual([
+			'https://short.url/concurrent',
+			'https://short.url/concurrent',
+		]);
+		expect(callShortenerAPI).toHaveBeenCalledTimes(1);
+		expect(shortener.inFlightShortenings.size).toBe(0);
+	});
+
+	it('retries a URL after its shared provider request fails', async () => {
+		const shortener = new URLShortener();
+		shortener.configuredServices = ['test'];
+		shortener.enabled = true;
+		const callShortenerAPI = jest.fn()
+			.mockRejectedValueOnce(new Error('provider unavailable'))
+			.mockResolvedValueOnce('https://short.url/recovered');
+		shortener.callShortenerAPI = callShortenerAPI;
+		const url = 'https://example.com/retry-after-failure';
+
+		const concurrentResults = await Promise.all([
+			shortener.shortenUrl(url),
+			shortener.shortenUrl(url),
+		]);
+		expect(concurrentResults).toEqual([null, null]);
+		expect(callShortenerAPI).toHaveBeenCalledTimes(1);
+
+		await expect(shortener.shortenUrl(url)).resolves.toBe('https://short.url/recovered');
+		expect(callShortenerAPI).toHaveBeenCalledTimes(2);
 	});
 });

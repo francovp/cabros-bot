@@ -49,6 +49,67 @@ function resolveSide(enriched = {}) {
 }
 
 /**
+ * Resolves every directional token from a value that may be a plain string or an
+ * object exposing `direction`, `trend`, or `action`.
+ *
+ * TradingView MCP payloads arrive in both shapes: `{ recommendation: "BUY" }`
+ * and `{ recommendation: { action: "BUY" } }`. Both must normalize identically,
+ * otherwise a valid object payload silently drops the whole HTF line.
+ *
+ * Object keys are ordered `direction` → `trend` → `action` → `status` so a neutral
+ * `action` (e.g. `HOLD`) never shadows an explicit directional field — matching the
+ * `recommendation.direction` before `recommendation.action` order used by
+ * `resolveDirectionFromRaw()` in marketScannerScoring.js.
+ *
+ * Every token is returned in precedence order, not just the first, so callers can
+ * skip non-directional values (`HOLD`, `mixed`) and keep looking.
+ *
+ * @param {*} value
+ * @returns {string[]}
+ */
+function resolveDirectionalTokens(value) {
+	if (typeof value === 'string') {
+		const trimmed = value.trim();
+		return trimmed ? [trimmed] : [];
+	}
+	if (value && typeof value === 'object' && !Array.isArray(value)) {
+		const tokens = [];
+		for (const key of ['direction', 'trend', 'action', 'status', 'recommendation']) {
+			const candidate = value[key];
+			if (typeof candidate === 'string' && candidate.trim()) {
+				tokens.push(candidate.trim());
+			}
+		}
+		return tokens;
+	}
+	return [];
+}
+
+/**
+ * Applies one precedence rule for contradictory confluence fields (GH-717).
+ *
+ * `net_score` is the strongest signal and always wins when present. Otherwise an
+ * explicit HTF direction is authoritative: a `status` that contradicts it is a
+ * provider serialization artifact, so side-aware classification is driven by the
+ * direction. When no explicit direction exists, the normalized `status` verdict
+ * stands, and finally the direction alone is classified against the alert side.
+ *
+ * @param {'bullish'|'bearish'|null} direction Normalized higher-timeframe direction.
+ * @param {'BUY'|'SELL'|null} side Resolved alert side.
+ * @returns {'aligned'|'counter-trend'|'mixed'}
+ */
+function classifyByDirection(direction, side) {
+	if (side === 'BUY') {
+		if (direction === 'bullish') return 'aligned';
+		if (direction === 'bearish') return 'counter-trend';
+	} else if (side === 'SELL') {
+		if (direction === 'bearish') return 'aligned';
+		if (direction === 'bullish') return 'counter-trend';
+	}
+	return 'mixed';
+}
+
+/**
  * Resolves higher-timeframe alignment metadata and generates a formatted status string.
  * @param {Object} enriched
  * @returns {{ classification: 'aligned'|'counter-trend'|'mixed', label: string, netScore: number|null, divergentTimeframes: string[], text: string }|null}
@@ -76,12 +137,20 @@ function resolveHtfAlignment(enriched = {}) {
 	const stringAlignment = typeof multiTimeframe.alignment === 'string' && multiTimeframe.alignment.trim()
 		? multiTimeframe.alignment.trim()
 		: null;
-	const stringRecommendation = typeof multiTimeframe.recommendation === 'string' && multiTimeframe.recommendation.trim()
-		? multiTimeframe.recommendation.trim()
-		: (typeof alignment.recommendation === 'string' && alignment.recommendation.trim() ? alignment.recommendation.trim() : null);
-	const stringTrend = typeof multiTimeframe.trend === 'string' && multiTimeframe.trend.trim()
-		? multiTimeframe.trend.trim()
-		: (typeof alignment.trend === 'string' && alignment.trend.trim() ? alignment.trend.trim() : null);
+	const recommendationTokens = [
+		...resolveDirectionalTokens(multiTimeframe.recommendation),
+		...resolveDirectionalTokens(alignment.recommendation),
+	];
+	const trendTokens = [
+		...resolveDirectionalTokens(multiTimeframe.trend),
+		...resolveDirectionalTokens(alignment.trend),
+	];
+	const stringRecommendation = recommendationTokens[0] ?? null;
+	const stringTrend = trendTokens[0] ?? null;
+	// `bias` is a supported root direction field in resolveDirectionFromRaw() but is
+	// not part of rawStatus/rawDirection, so it needs its own token for the
+	// fail-open precondition below.
+	const stringBias = resolveDirectionalTokens(multiTimeframe.bias)[0] ?? null;
 
 	const netScore = numberOrNull(alignment.net_score ?? multiTimeframe.net_score);
 	const rawStatus = typeof alignment.status === 'string' && alignment.status.trim()
@@ -105,8 +174,11 @@ function resolveHtfAlignment(enriched = {}) {
 		divergentTimeframes = rawDivergent.split(',').map(tf => tf.trim()).filter(Boolean);
 	}
 
-	// Fail open if no meaningful confluence fields are found
-	if (netScore === null && !rawStatus && !rawDirection) {
+	// Fail open if no meaningful confluence fields are found. `bias` is included
+	// because it is a supported root direction field that neither rawStatus nor
+	// rawDirection reads, so a bias-only payload would otherwise be dropped even
+	// though the directional candidate chain knows how to classify it.
+	if (netScore === null && !rawStatus && !rawDirection && !stringBias) {
 		return null;
 	}
 
@@ -130,26 +202,79 @@ function resolveHtfAlignment(enriched = {}) {
 		}
 	} else {
 		const normalizedStatus = normalizeConfluenceStatus(rawStatus);
-		const normalizedDirection = normalizeTrendDirection(rawDirection || rawStatus);
 
-		if (normalizedStatus === 'aligned') {
+		// Pick the first *directional* token from an ordered candidate chain, skipping
+		// non-directional truthy values such as `recommendation.action: "HOLD"`, which
+		// would otherwise mask a directional alignment status (GH-717).
+		//
+		// The chain is built from the original payload fields, not from the collapsed
+		// `rawDirection`, and its order matches `resolveDirectionFromRaw()` in
+		// marketScannerScoring.js term for term — root direction/trend/bias, then the
+		// nested alignment direction and trend, then the nested status before the root
+		// status, then the recommendation tokens — so HTF rendering and scanner ranking
+		// agree on precedence rather than merely on vocabulary. (Rebuilding from
+		// `rawDirection` would invert root/nested precedence, because `rawDirection`
+		// reads `alignment.direction` before `multiTimeframe.direction`.)
+		//
+		// Every entry is expanded through resolveDirectionalTokens() *at its own field
+		// position*, so an object-valued field such as `trend: { direction: 'bullish' }`
+		// carries the same precedence as the string form. Appending the extracted trend
+		// tokens at the end instead would silently demote them below lower-precedence
+		// fields.
+		//
+		// Note the direction fields are root-first but the statuses are nested-first:
+		// that asymmetry is what both `rawStatus` above and `resolveDirectionFromRaw()`
+		// actually do, and keeping it means the chosen direction and the chosen status
+		// verdict come from the same level of the payload.
+		//
+		// No rawStatus guard is needed: `normalizeTrendDirection` never matches a
+		// confluence verdict ('aligned', 'counter-trend'), so a status can only enter
+		// this chain when it is genuinely directional ('bullish' / 'bearish'), which is
+		// exactly the case that should take precedence over a recommendation action.
+		// The status entry is the single token `rawStatus` selected, so the chosen
+		// direction and the chosen status verdict always come from the same level of
+		// the payload. Consulting the other level's status here would let a
+		// non-directional nested verdict (e.g. 'aligned') fall through to a
+		// contradictory directional root verdict, contradicting `rawStatus`.
+		const authoritativeStatus = (typeof alignment.status === 'string' && alignment.status.trim())
+			? alignment.status
+			: multiTimeframe.status;
+
+		const directionalCandidates = [
+			...resolveDirectionalTokens(multiTimeframe.direction),
+			...resolveDirectionalTokens(multiTimeframe.trend),
+			...resolveDirectionalTokens(multiTimeframe.bias),
+			...resolveDirectionalTokens(alignment.direction),
+			...resolveDirectionalTokens(alignment.trend),
+			authoritativeStatus,
+			...recommendationTokens,
+		];
+		let explicitDirection = null;
+		for (const candidate of directionalCandidates) {
+			const normalized = typeof candidate === 'string' && candidate.trim()
+				? normalizeTrendDirection(candidate)
+				: null;
+			if (normalized) {
+				explicitDirection = normalized;
+				break;
+			}
+		}
+
+		// An explicit directional field is authoritative only when the side is known,
+		// so side-aware classification can actually be compared against it. With an
+		// unknown side there is nothing to compare, so the status verdict stands.
+		if (explicitDirection && side) {
+			classification = classifyByDirection(explicitDirection, side);
+		} else if (normalizedStatus === 'aligned') {
 			classification = 'aligned';
 		} else if (normalizedStatus === 'counter-trend') {
 			classification = 'counter-trend';
-		} else if (normalizedStatus === 'unknown') {
-			classification = 'mixed';
-		} else if (side === 'BUY') {
-			if (normalizedDirection === 'bullish') {
-				classification = 'aligned';
-			} else if (normalizedDirection === 'bearish') {
-				classification = 'counter-trend';
-			}
-		} else if (side === 'SELL') {
-			if (normalizedDirection === 'bearish') {
-				classification = 'aligned';
-			} else if (normalizedDirection === 'bullish') {
-				classification = 'counter-trend';
-			}
+		} else {
+			// No usable status verdict: fall back to whichever directional token exists.
+			classification = classifyByDirection(
+				normalizeTrendDirection(rawDirection || rawStatus),
+				side,
+			);
 		}
 	}
 
@@ -208,4 +333,6 @@ module.exports = {
 	formatHtfAlignment,
 	resolveHtfAlignment,
 	resolveSide,
+	resolveDirectionalTokens,
+	classifyByDirection,
 };

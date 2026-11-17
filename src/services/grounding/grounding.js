@@ -2,10 +2,9 @@ const {
 	GROUNDING_MAX_SOURCES,
 	GROUNDING_TIMEOUT_MS,
 	GROUNDING_MAX_LENGTH,
-	GROUNDING_MODEL_NAME,
 	NEWS_ANALYSIS_SYSTEM_PROMPT,
-	GEMINI_MODEL_NAME,
 } = require('./config');
+const { getGroundingModelName, getGeminiModelName } = require('./runtimeModels');
 const gemini = require('./gemini');
 const genaiClient = require('./genaiClient');
 const { getPromptService, PromptKeys } = require('../prompts');
@@ -13,14 +12,17 @@ const metrics = require('./metrics');
 const sentryService = require('../monitoring/SentryService');
 const { deriveAssetContext, deriveCleanSearchQuery } = require('../tradingview/parseTradingViewSignal');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { registerGlobalUsage, tokenCostBudgetService } = require('../../lib/tokenUsage');
+const { CircuitBreaker } = require('../../lib/circuitBreaker');
 
+const geminiCircuitBreaker = new CircuitBreaker({ name: 'gemini' });
 const promptService = getPromptService();
 const coalescedSearches = new Map();
 
 function startSearch({ searchQuery, maxSources, signal, timeoutMs }) {
 	return genaiClient.search({
 		query: searchQuery,
-		model: GROUNDING_MODEL_NAME,
+		model: getGroundingModelName(),
 		maxResults: maxSources,
 		signal,
 		timeoutMs,
@@ -37,7 +39,7 @@ function getCoalescedSearch({ assetContext, searchQuery, maxSources, signal, tim
 
 	const normalizedQuery = (searchQuery || '').trim().toLowerCase();
 	const symbol = (assetContext?.symbol || '').trim().toUpperCase();
-	const key = `${GROUNDING_MODEL_NAME}:${maxSources}:stock:${symbol || 'query'}:${normalizedQuery}`;
+	const key = `${getGroundingModelName()}:${maxSources}:stock:${symbol || 'query'}:${normalizedQuery}`;
 	const now = Date.now();
 	const existing = coalescedSearches.get(key);
 	if (existing && now - existing.createdAt <= coalesceWindowMs) {
@@ -84,6 +86,20 @@ function getCoalescingStatus() {
  * @returns {Promise<string>} Optimized search query
  */
 async function deriveSearchQuery(alertText, opts = {}) {
+	if (tokenCostBudgetService.isBudgetExceeded()) {
+		console.warn('[Grounding] Daily token cost budget exceeded, returning raw alert text as search query');
+		return alertText;
+	}
+
+	const attempt = typeof geminiCircuitBreaker.acquireAttempt === 'function'
+		? geminiCircuitBreaker.acquireAttempt()
+		: { allowed: geminiCircuitBreaker.canExecute(), token: geminiCircuitBreaker.isHalfOpen() ? Symbol('probe') : null };
+	if (!attempt.allowed) {
+		console.warn('[Grounding] Gemini circuit breaker is unavailable, falling back to raw alert text');
+		return alertText;
+	}
+	const probeToken = attempt.token;
+
 	try {
 		const { systemPrompt, userPrompt } = await promptService.getChatPrompt(
 			PromptKeys.SEARCH_QUERY_DERIVATION,
@@ -96,17 +112,27 @@ async function deriveSearchQuery(alertText, opts = {}) {
 			opts: { temperature: opts.temperature, signal: opts.signal },
 		});
 
-		if (opts.tokenUsage && response.usage) {
-			opts.tokenUsage.addUsage(response.usage, GEMINI_MODEL_NAME);
+		if (response && response.usage) {
+			const effectiveModel = response.modelUsed || getGeminiModelName() || 'gemini';
+			registerGlobalUsage(response.usage, effectiveModel);
+			if (opts.tokenUsage) {
+				opts.tokenUsage.addUsage(response.usage, effectiveModel);
+			}
 		}
 
 		if (!response || !response.text) {
 			throw new Error('Invalid response from LLM');
 		}
 
+		geminiCircuitBreaker.recordSuccess(probeToken);
 		return response.text;
 	} catch (error) {
 		console.warn('[Grounding] Query derivation failed:', error.message);
+		if (!opts.signal?.aborted) {
+			geminiCircuitBreaker.recordFailure(error, probeToken);
+		} else if (probeToken) {
+			geminiCircuitBreaker.releaseProbe(probeToken);
+		}
 		// Fall back to truncated alert text
 		return alertText;
 	}
@@ -123,6 +149,19 @@ function getEffectiveGroundingMaxLength() {
  * @returns {Promise<GeminiResponse>} Summary with citations
  */
 async function groundAlert({ text, options = {} }) {
+	if (tokenCostBudgetService.isBudgetExceeded()) {
+		console.warn('[Grounding] Daily token cost budget exceeded, returning ungrounded alert fallback');
+		return {
+			text,
+			sentiment: 'NEUTRAL',
+			sentiment_score: 0,
+			insights: [],
+			sources: [],
+			confidence: 0.5,
+			budgetExceeded: true,
+		};
+	}
+
 	const runtimeConfig = getRuntimeConfig();
 	const {
 		maxSources = runtimeConfig.GROUNDING_MAX_SOURCES,
@@ -137,6 +176,14 @@ async function groundAlert({ text, options = {} }) {
 	const systemPromptOverride = promptType === 'NEWS_ANALYSIS'
 		? NEWS_ANALYSIS_SYSTEM_PROMPT
 		: undefined;
+
+	if (!geminiCircuitBreaker.canExecute()) {
+		const cbError = new Error('Grounding failed: Gemini circuit breaker is OPEN');
+		cbError.category = 'circuit_breaker_open';
+		cbError.status = 503;
+		metrics.recordFailure('circuit_breaker_open', cbError, promptType);
+		throw cbError;
+	}
 
 	let currentPhase = 'search';
 	const controller = new AbortController();
@@ -177,10 +224,14 @@ async function groundAlert({ text, options = {} }) {
 			ownsSearchUsage = true;
 		}
 
-		const { results: searchResults, totalResults, searchResultText, usage: searchUsage } = searchResponse;
+		const { results: searchResults, totalResults, searchResultText, usage: searchUsage, modelUsed: searchModelUsed } = searchResponse;
 
-		if (ownsSearchUsage && tokenUsage && searchUsage) {
-			tokenUsage.addUsage(searchUsage, GROUNDING_MODEL_NAME);
+		if (ownsSearchUsage && searchUsage) {
+			const effectiveSearchModel = searchModelUsed || getGroundingModelName() || 'gemini';
+			registerGlobalUsage(searchUsage, effectiveSearchModel);
+			if (tokenUsage) {
+				tokenUsage.addUsage(searchUsage, effectiveSearchModel);
+			}
 		}
 		console.debug(`[Grounding] Retrieved ${searchResults.length}/${totalResults} search results for query: ${searchQuery}`);
 
@@ -221,10 +272,14 @@ async function groundAlert({ text, options = {} }) {
 			} : {}),
 		};
 
+		geminiCircuitBreaker.recordSuccess();
 		metrics.recordSuccess(Date.now() - startTime, promptType);
 		return response;
 	} catch (error) {
 		clearTimeout(timeoutId);
+		if (error && error.category === 'circuit_breaker_open') {
+			throw error;
+		}
 		const isTimeout = error.message === 'Grounding timeout' ||
 			error.name === 'AbortError' ||
 			signal.aborted ||
@@ -232,6 +287,7 @@ async function groundAlert({ text, options = {} }) {
 
 		if (isTimeout) {
 			const phaseError = new Error(`Grounding ${currentPhase} timeout`);
+			geminiCircuitBreaker.recordFailure(phaseError);
 			metrics.recordFailure('timeout', phaseError, promptType);
 			sentryService.captureRuntimeError({
 				channel: 'grounding',
@@ -242,6 +298,7 @@ async function groundAlert({ text, options = {} }) {
 			throw new Error('Grounding timeout');
 		}
 
+		geminiCircuitBreaker.recordFailure(error);
 		metrics.recordFailure('error', error, promptType);
 		throw new Error(`Grounding failed: ${error.message}`);
 	}
@@ -251,5 +308,10 @@ module.exports = {
 	groundAlert,
 	deriveSearchQuery,
 	getCoalescingStatus,
-	_resetForTesting: () => coalescedSearches.clear(),
+	getCircuitBreakerStatus: () => geminiCircuitBreaker.getStatus(),
+	_getCircuitBreakerForTesting: () => geminiCircuitBreaker,
+	_resetForTesting: () => {
+		coalescedSearches.clear();
+		geminiCircuitBreaker.reset();
+	},
 };

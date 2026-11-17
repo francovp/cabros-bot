@@ -5,6 +5,7 @@ const http = require('http');
 const { JobService } = require('../../src/services/jobs/JobService');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const JobRepository = require('../../src/services/jobs/JobRepository');
+const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const nativeFetch = globalThis.fetch;
@@ -84,6 +85,62 @@ describe('JobService Unit Tests', () => {
 			expect(result.success).toBe(true);
 			expect(result.jobId).toBeDefined();
 			expect(result.status).toBe('processing');
+		});
+
+		it('persists market-scanner scan-specific options for background execution', async () => {
+			const metadata = await jobService.createJob('market-scanner', {
+				scans: ['rating_filter', 'consecutive_candles_scan'],
+				rating: -2,
+				pattern_type: 'bearish',
+				candle_count: 4,
+				min_growth: 1.5,
+			});
+
+			const rawJob = await jobService.repository.get(metadata.jobId);
+			expect(rawJob.requestMetadata).toEqual(expect.objectContaining({
+				rating: -2,
+				pattern_type: 'bearish',
+				candle_count: 4,
+				min_growth: 1.5,
+			}));
+		});
+
+		it('persists preset destination arrays and restores them for worker delivery', async () => {
+			const runBackgroundJobSpy = jest.spyOn(jobService, '_runBackgroundJob').mockResolvedValue();
+			const metadata = await jobService.createJob('market-scanner', {
+				scans: ['top_gainers'],
+				channels: ['telegram'],
+				destinations: { telegramChatIds: ['-1001234567890', '-1009876543210'] },
+			}, undefined, { scannerPresetId: 'preset-1' });
+
+			expect(runBackgroundJobSpy).toHaveBeenCalledWith(metadata.jobId, expect.any(Object), expect.any(Object), undefined);
+			const rawJob = await jobService.repository.get(metadata.jobId);
+			expect(rawJob.requestMetadata.destinations).toEqual({
+				telegramChatIds: ['-1001234567890', '-1009876543210'],
+			});
+			expect(rawJob.requestMetadata.scannerPresetId).toBe('preset-1');
+			expect(jobService._getRoutingFromJob(rawJob)).toMatchObject({
+				channels: ['telegram'],
+				destinations: { telegramChatIds: ['-1001234567890', '-1009876543210'] },
+			});
+			const publicJob = await jobService.getJob(metadata.jobId);
+			expect(JSON.stringify(publicJob)).not.toContain('-1001234567890');
+			expect(publicJob).not.toHaveProperty('destinations');
+		});
+
+		it('does not persist destinations submitted to the general market-scanner job endpoint', async () => {
+			const runBackgroundJobSpy = jest.spyOn(jobService, '_runBackgroundJob').mockResolvedValue();
+			const metadata = await jobService.createJob('market-scanner', {
+				scans: ['top_gainers'],
+				channels: ['telegram'],
+				destinations: { telegramChatIds: ['-1001234567890'] },
+			});
+
+			const rawJob = await jobService.repository.get(metadata.jobId);
+			expect(rawJob.requestMetadata).not.toHaveProperty('destinations');
+			expect(rawJob.requestMetadata).not.toHaveProperty('scannerPresetId');
+			expect(jobService._getRoutingFromJob(rawJob)).not.toHaveProperty('destinations');
+			runBackgroundJobSpy.mockRestore();
 		});
 
 		it('correctly validates and parses timeoutMs string format like 1e3', async () => {
@@ -795,12 +852,39 @@ describe('JobService Unit Tests', () => {
 			expect(job.deliveryResults).toBeDefined();
 		});
 
+		it('preserves scanner-preset source for async preset jobs', async () => {
+			const notificationManager = require('../../src/controllers/webhooks/handlers/alert/alert').getNotificationManager();
+			tradingViewMcpService.callScanTool.mockResolvedValue([
+				{ symbol: 'BINANCE:ETHUSDT', changePercent: 5.0, indicators: { close: 3200, RSI: 55 } },
+			]);
+
+			await jobService.createJob('market-scanner', { scans: ['top_gainers'] });
+			await jobService.waitForActiveJobs();
+			expect(notificationManager.sendToAll).toHaveBeenCalledWith(
+				expect.objectContaining({ source: 'tradingview-analysis', category: 'scanner' }),
+				expect.any(Object),
+			);
+
+			notificationManager.sendToAll.mockClear();
+			await jobService.createJob('market-scanner', { scans: ['top_gainers'] }, undefined, {
+				scannerPresetId: 'preset-1',
+			});
+			await jobService.waitForActiveJobs();
+
+			expect(notificationManager.sendToAll).toHaveBeenCalledWith(
+				expect.objectContaining({ source: 'scanner-preset', category: 'scanner' }),
+				expect.any(Object),
+			);
+		});
+
 		it('preserves market-scanner enrichment options for background execution', async () => {
+			process.env.SCANNER_ATR_MULTIPLIER = '3';
+			process.env.SCANNER_ACCOUNT_RISK_PCT = '0.5';
 			tradingViewMcpService.callScanTool.mockResolvedValueOnce([
 				{
 					symbol: 'BINANCE:BTCUSDT',
 					changePercent: 3.5,
-					indicators: { close: 65000, RSI: 62 },
+					indicators: { close: 65000, RSI: 62, ATR: 1300 },
 					volume_ratio: 1.8,
 					breakout_type: 'bullish',
 				},
@@ -835,12 +919,93 @@ describe('JobService Unit Tests', () => {
 				signal: expect.any(AbortSignal),
 			});
 			expect(job.alertText).toContain('🔥 HTF ALIGNED 82%');
+			expect(job.alertText).toContain('Pos: 8.33% @ 0.50% risk');
+			process.env.SCANNER_ACCOUNT_RISK_PCT = '2';
+			job = await jobService.getJob(metadata.jobId);
 			expect(job.scanResults[0].scores[0]).toEqual(expect.objectContaining({
 				symbol: 'BINANCE:BTCUSDT',
 				score: expect.any(Number),
 				reason: expect.stringContaining('HTF aligned +10'),
 				trendConfluence: expect.objectContaining({ status: 'aligned', confidence: 82 }),
+				positionSizing: expect.objectContaining({ suggestedStopPct: 6, suggestedPositionPct: 8.33 }),
 			}));
+		});
+
+		it('records signal outcomes for async expanded-analysis jobs when enabled', async () => {
+			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue({});
+
+			tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+				symbol: 'BINANCE:BTCUSDT',
+				price_data: { close: 65000, change_percent: 2.0 },
+				rsi: { value: 50 },
+				atr: 500,
+				market_sentiment: { overall_sentiment: 'Bearish', overall_rating: 0.75 },
+			});
+
+			const metadata = await jobService.createJob('expanded-analysis', {
+				symbols: ['BINANCE:BTCUSDT'],
+				timeframe: '4h',
+			});
+
+			await jobService.waitForActiveJobs();
+			const job = await jobService.getJob(metadata.jobId);
+
+			expect(job.status).toBe('completed');
+			expect(recordSpy).toHaveBeenCalledTimes(1);
+			const recorded = recordSpy.mock.calls[0][0];
+			expect(recorded.source).toBe('expanded-analysis');
+			expect(recorded.symbol).toBe('BTCUSDT');
+			expect(recorded.exchange).toBe('BINANCE');
+			expect(recorded.timeframe).toBe('4h');
+			expect(recorded.setupType).toBe('expanded-analysis');
+			expect(recorded.side).toBe('SELL');
+			expect(recorded.price).toBe(65000);
+			expect(recorded.stop).toBe(65750);
+			expect(recorded.target).toBe(63500);
+			expect(recorded.score).toBe(-0.75);
+			expect(recorded.confidenceScore).toBe(0.75);
+
+			recordSpy.mockRestore();
+			signalOutcomeService.isEnabled.mockRestore();
+		});
+
+		it('records signal outcomes for async market-scanner jobs when enabled', async () => {
+			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue({});
+
+			tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+				{
+					symbol: 'BINANCE:SOLUSDT',
+					changePercent: 12.4,
+					indicators: { close: 150, atr: 5, bb_lower: 140, bb_upper: 160 },
+				},
+			]);
+
+			const metadata = await jobService.createJob('market-scanner', {
+				scans: ['top_gainers'],
+				timeframe: '1D',
+				exchange: 'BINANCE',
+			});
+
+			await jobService.waitForActiveJobs();
+			const job = await jobService.getJob(metadata.jobId);
+
+			expect(job.status).toBe('completed');
+			expect(recordSpy).toHaveBeenCalledTimes(1);
+			const recorded = recordSpy.mock.calls[0][0];
+			expect(recorded.source).toBe('market-scanner');
+			expect(recorded.symbol).toBe('BINANCE:SOLUSDT');
+			expect(recorded.exchange).toBe('BINANCE');
+			expect(recorded.timeframe).toBe('1D');
+			expect(recorded.setupType).toBe('top_gainers');
+			expect(recorded.side).toBe('BUY');
+			expect(recorded.price).toBe(150);
+			expect(recorded.stop).toBe(142.5);
+			expect(recorded.score).toBe(12.4);
+
+			recordSpy.mockRestore();
+			signalOutcomeService.isEnabled.mockRestore();
 		});
 	});
 
@@ -2180,6 +2345,34 @@ describe('JobService Unit Tests', () => {
 			} finally {
 				process.env.JOB_CALLBACK_RETRY_DELAY_MS = prevDelay;
 				lookupSpy.mockRestore();
+			}
+		});
+	});
+
+	describe('_broadcastJobProgress', () => {
+		it('broadcasts job-progress and scanner-result with persisted job.summary', () => {
+			const { adminSseService } = require('../../src/services/sse/AdminSseService');
+			const broadcastSpy = jest.spyOn(adminSseService, 'broadcast').mockImplementation(() => {});
+
+			try {
+				jobService._broadcastJobProgress({
+					jobId: 'job-summary-test',
+					type: 'market-scanner',
+					status: 'completed',
+					summary: { total: 5, passed: 3 },
+				});
+
+				expect(broadcastSpy).toHaveBeenCalledWith('job-progress', expect.objectContaining({
+					jobId: 'job-summary-test',
+					summary: { total: 5, passed: 3 },
+				}));
+
+				expect(broadcastSpy).toHaveBeenCalledWith('scanner-result', expect.objectContaining({
+					jobId: 'job-summary-test',
+					summary: { total: 5, passed: 3 },
+				}));
+			} finally {
+				broadcastSpy.mockRestore();
 			}
 		});
 	});

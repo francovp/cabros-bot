@@ -298,4 +298,243 @@ describe('Cache Module - Unit Tests', () => {
 			expect(second).toEqual(alert2);
 		});
 	});
+
+	describe('Cache Metrics and Observability', () => {
+		it('should return initial metrics with zero counters and null timestamps', () => {
+			const metrics = cache.getMetrics();
+			expect(metrics).toEqual({
+				hits: 0,
+				misses: 0,
+				hitRate: 0,
+				totalEntries: 0,
+				evictions: 0,
+				estimatedMemoryBytes: 0,
+				lastHitAt: null,
+				lastMissAt: null,
+			});
+		});
+
+		it('should increment hits and update lastHitAt on valid cache read', async () => {
+			const data = { alert: { symbol: 'BTCUSDT' } };
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data);
+
+			const retrieved = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			expect(retrieved).toEqual(data);
+
+			const metrics = cache.getMetrics();
+			expect(metrics.hits).toBe(1);
+			expect(metrics.misses).toBe(0);
+			expect(metrics.hitRate).toBe(1);
+			expect(metrics.totalEntries).toBe(1);
+			expect(typeof metrics.lastHitAt).toBe('string');
+			expect(new Date(metrics.lastHitAt).toISOString()).toBe(metrics.lastHitAt);
+			expect(metrics.lastMissAt).toBeNull();
+			expect(metrics.estimatedMemoryBytes).toBeGreaterThan(0);
+		});
+
+		it('should increment misses and update lastMissAt on non-existent read', async () => {
+			const retrieved = await cache.get('ETHUSD', EventCategory.PRICE_SURGE);
+			expect(retrieved).toBeNull();
+
+			const metrics = cache.getMetrics();
+			expect(metrics.hits).toBe(0);
+			expect(metrics.misses).toBe(1);
+			expect(metrics.hitRate).toBe(0);
+			expect(metrics.totalEntries).toBe(0);
+			expect(metrics.lastHitAt).toBeNull();
+			expect(typeof metrics.lastMissAt).toBe('string');
+			expect(new Date(metrics.lastMissAt).toISOString()).toBe(metrics.lastMissAt);
+		});
+
+		it('should compute hitRate rounded to 3 decimal places', async () => {
+			const data = { alert: { symbol: 'BTCUSDT' } };
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data);
+
+			// 2 hits
+			await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			// 1 miss
+			await cache.get('NONEXISTENT', EventCategory.PRICE_SURGE);
+
+			const metrics = cache.getMetrics();
+			expect(metrics.hits).toBe(2);
+			expect(metrics.misses).toBe(1);
+			// 2 / 3 = 0.66666... -> 0.667
+			expect(metrics.hitRate).toBe(0.667);
+		});
+
+		it('should exclude expired entries from totalEntries', async () => {
+			const data = { alert: { symbol: 'BTCUSDT' } };
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data);
+			const residentMemoryBytes = cache.getMetrics().estimatedMemoryBytes;
+
+			expect(cache.getMetrics().totalEntries).toBe(1);
+
+			// Wait for expiry (ttlMs is 1000)
+			await new Promise(resolve => setTimeout(resolve, 1100));
+
+			const metrics = cache.getMetrics();
+			expect(metrics.totalEntries).toBe(0);
+			// Expired values remain resident until retrieval or periodic cleanup removes them.
+			expect(metrics.estimatedMemoryBytes).toBe(residentMemoryBytes);
+			expect(cache.cache.size).toBe(1);
+		});
+
+		it('should report metrics without iterating every cache entry', async () => {
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: { symbol: 'BTCUSDT' } });
+			await cache.set('ETHUSD', EventCategory.PRICE_SURGE, { alert: { symbol: 'ETHUSD' } });
+
+			const originalEntries = cache.cache.entries;
+			cache.cache.entries = () => {
+				throw new Error('metrics must not scan cache entries');
+			};
+			try {
+				expect(cache.getMetrics()).toEqual(expect.objectContaining({
+					totalEntries: 2,
+					estimatedMemoryBytes: expect.any(Number),
+				}));
+			} finally {
+				cache.cache.entries = originalEntries;
+			}
+		});
+
+		it('should count expired entries without draining the expiry index', async () => {
+			cache.ttlMs = 1;
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: { symbol: 'BTCUSDT' } });
+			await cache.set('ETHUSD', EventCategory.PRICE_SURGE, { alert: { symbol: 'ETHUSD' } });
+			await new Promise(resolve => setTimeout(resolve, 10));
+
+			const removeExpirationIndex = jest.spyOn(cache, '_removeExpirationIndex');
+			expect(cache.getMetrics().totalEntries).toBe(0);
+			expect(removeExpirationIndex).not.toHaveBeenCalled();
+		});
+
+		it('should count expired entries when active entries share the expiry index', () => {
+			const mockNow = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+			try {
+				cache._setCacheEntry('BTCUSDT:expired', {
+					timestamp: 0,
+					expiresAt: 999,
+					data: { alert: { symbol: 'BTCUSDT' } },
+				});
+				cache._setCacheEntry('ETHUSD:expired', {
+					timestamp: 0,
+					expiresAt: 1_000,
+					data: { alert: { symbol: 'ETHUSD' } },
+				});
+				cache._setCacheEntry('AAPL:active', {
+					timestamp: 0,
+					expiresAt: 1_001,
+					data: { alert: { symbol: 'AAPL' } },
+				});
+
+				expect(cache.getMetrics().totalEntries).toBe(1);
+				cache.cleanup();
+				expect(cache.cache.size).toBe(1);
+				expect(cache.cache.has('AAPL:active')).toBe(true);
+				expect(cache.getMetrics()).toEqual(expect.objectContaining({
+					evictions: 2,
+					totalEntries: 1,
+				}));
+			} finally {
+				mockNow.mockRestore();
+			}
+		});
+
+		it('should prune expired entries as one expiry-index batch during cleanup', async () => {
+			cache.ttlMs = 1;
+			for (let index = 0; index < 25; index++) {
+				await cache.set(`SYMBOL${index}`, EventCategory.PRICE_SURGE, { alert: { index } });
+			}
+			await new Promise(resolve => setTimeout(resolve, 10));
+
+			const removeExpirationIndex = jest.spyOn(cache, '_removeExpirationIndex');
+			cache.cleanup();
+
+			expect(removeExpirationIndex).not.toHaveBeenCalled();
+			expect(cache.cache.size).toBe(0);
+			expect(cache._expirationNodesByKey.size).toBe(0);
+			expect(cache.getMetrics()).toEqual(expect.objectContaining({
+				evictions: 25,
+				totalEntries: 0,
+				estimatedMemoryBytes: 0,
+			}));
+		});
+
+		it('should track evictions when reading expired entry and during cleanup', async () => {
+			const data1 = { alert: { symbol: 'BTCUSDT' } };
+			const data2 = { alert: { symbol: 'ETHUSD' } };
+
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data1);
+			await cache.set('ETHUSD', EventCategory.PRICE_SURGE, data2);
+
+			await new Promise(resolve => setTimeout(resolve, 1100));
+
+			// get() on expired entry evicts it
+			const res = await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			expect(res).toBeNull();
+			expect(cache.getMetrics().evictions).toBe(1);
+			expect(cache.getMetrics().misses).toBe(1);
+
+			// cleanup() evicts remaining expired entries
+			cache.cleanup();
+			expect(cache.getMetrics().evictions).toBe(2);
+		});
+
+		it('should include cache capacity evictions in metrics', async () => {
+			cache.maxEntries = 1;
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: { symbol: 'BTCUSDT' } });
+			await cache.set('ETHUSD', EventCategory.PRICE_SURGE, { alert: { symbol: 'ETHUSD' } });
+
+			expect(cache.getMetrics()).toEqual(expect.objectContaining({
+				evictions: 1,
+				totalEntries: 1,
+			}));
+		});
+
+		it('should reset metrics when resetMetrics is called', async () => {
+			const data = { alert: { symbol: 'BTCUSDT' } };
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data);
+			await cache.get('BTCUSDT', EventCategory.PRICE_SURGE);
+			await cache.get('MISS', EventCategory.PRICE_SURGE);
+
+			expect(cache.getMetrics().hits).toBe(1);
+			expect(cache.getMetrics().misses).toBe(1);
+
+			cache.resetMetrics();
+
+			const resetMetrics = cache.getMetrics();
+			expect(resetMetrics.hits).toBe(0);
+			expect(resetMetrics.misses).toBe(0);
+			expect(resetMetrics.hitRate).toBe(0);
+			expect(resetMetrics.evictions).toBe(0);
+			expect(resetMetrics.lastHitAt).toBeNull();
+			expect(resetMetrics.lastMissAt).toBeNull();
+			// Active entry still exists in cache Map
+			expect(resetMetrics.totalEntries).toBe(1);
+			expect(resetMetrics.estimatedMemoryBytes).toBeGreaterThan(0);
+		});
+
+		it('should return status shape from getStatus()', async () => {
+			const status = cache.getStatus(true);
+			expect(status).toEqual({
+				enabled: true,
+				configured: true,
+				ready: true,
+				status: 'ready',
+				mode: 'in-memory',
+				backend: null,
+				metrics: expect.objectContaining({
+					hits: 0,
+					misses: 0,
+					hitRate: 0,
+					totalEntries: 0,
+					evictions: 0,
+					estimatedMemoryBytes: 0,
+					lastHitAt: null,
+					lastMissAt: null,
+				}),
+			});
+		});
+	});
 });

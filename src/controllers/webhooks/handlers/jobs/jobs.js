@@ -8,19 +8,62 @@ const {
 	MAX_JOB_LIST_LIMIT,
 } = require('../../../../services/jobs/JobService');
 const sentryService = require('../../../../services/monitoring/SentryService');
+const { sendErrorFrom, STANDARD_ERROR_CODES } = require('../../../../lib/errorEnvelope');
+const { resolveDryRunCost, hasUnrecognisedCostFlag } = require('../../../../lib/dryRunRequest');
+const costEstimationService = require('../../../../services/cost/CostEstimationService');
 
 function postCreateJob(botOrGetter) {
 	return async (req, res) => {
 		const { type } = req.body || {};
 
 		if (!type) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: 'Missing type parameter',
-				code: 'INVALID_REQUEST',
+				code: STANDARD_ERROR_CODES.INVALID_REQUEST,
 			});
 		}
 
 		try {
+			if (hasUnrecognisedCostFlag(req)) {
+				return sendErrorFrom(res, 400, {
+					error: 'Unrecognised dryRun/estimate value. Supported: true, false, cost, or estimate.',
+					code: STANDARD_ERROR_CODES.INVALID_REQUEST,
+				});
+			}
+			if (resolveDryRunCost(req) && !costEstimationService.isEnabled()) {
+				return sendErrorFrom(res, 404, {
+					error: 'Cost estimation is disabled. Set ENABLE_DRY_RUN_COST=true to enable.',
+					code: 'FEATURE_DISABLED',
+				});
+			}
+			if (resolveDryRunCost(req) && costEstimationService.isEnabled()) {
+				const { parsed } = jobService.validateJobRequest(type, req.body);
+				const symbols = type === 'expanded-analysis' && Array.isArray(parsed?.symbols)
+					? parsed.symbols.map((s) => (typeof s === 'string' ? s : (s.raw || (s.exchange && s.symbol ? `${s.exchange}:${s.symbol}` : s.symbol || String(s)))))
+					: (Array.isArray(parsed?.scans) ? parsed.scans : (Array.isArray(req.body?.scans) ? req.body.scans : []));
+				const costEstimate = costEstimationService.estimate({
+					operation: 'tradingview-analysis',
+					symbols,
+					body: {
+						...req.body,
+						symbols,
+						scans: parsed?.scans || req.body?.scans,
+						includeMultiTimeframe: parsed?.includeMultiTimeframe ?? req.body?.includeMultiTimeframe,
+						analysisMode: parsed?.analysisMode ?? req.body?.analysisMode,
+						limit: parsed?.limit ?? req.body?.limit,
+					},
+				});
+				return res.status(200).json({
+					success: true,
+					dryRun: 'cost',
+					costEstimate,
+					tokensIn: costEstimate.tokensIn,
+					tokensOut: costEstimate.tokensOut,
+					estimatedTotalTokens: costEstimate.estimatedTotalTokens,
+					estimatedCostUsd: costEstimate.estimatedCostUsd,
+					type,
+				});
+			}
 			const result = await jobService.createJob(type, req.body, botOrGetter);
 			return res.status(201).json(result);
 		} catch (error) {
@@ -29,9 +72,9 @@ function postCreateJob(botOrGetter) {
 				error.name === 'MarketScannerRequestError' ||
 				error.statusCode
 			) {
-				return res.status(error.statusCode || 400).json({
+				return sendErrorFrom(res, error.statusCode || 400, {
 					error: error.message,
-					code: error.code || 'INVALID_REQUEST',
+					code: error.code || STANDARD_ERROR_CODES.INVALID_REQUEST,
 					...(typeof error.jobId === 'string' ? { jobId: error.jobId } : {}),
 				});
 			}
@@ -47,9 +90,9 @@ function postCreateJob(botOrGetter) {
 				},
 			});
 
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error',
-				code: 'INTERNAL_ERROR',
+				code: STANDARD_ERROR_CODES.INTERNAL_ERROR,
 			});
 		}
 	};
@@ -60,30 +103,30 @@ async function getJobList(req, res) {
 	const limit = rawLimit === undefined ? DEFAULT_JOB_LIST_LIMIT : Number(rawLimit);
 
 	if (rawLimit !== undefined && typeof rawLimit !== 'string') {
-		return res.status(400).json({
+		return sendErrorFrom(res, 400, {
 			error: 'Invalid limit. Use a single integer query parameter.',
-			code: 'INVALID_REQUEST',
+			code: STANDARD_ERROR_CODES.INVALID_REQUEST,
 		});
 	}
 
 	if (!Number.isInteger(limit) || limit < 1 || limit > MAX_JOB_LIST_LIMIT) {
-		return res.status(400).json({
+		return sendErrorFrom(res, 400, {
 			error: `Invalid limit. Use an integer between 1 and ${MAX_JOB_LIST_LIMIT}.`,
-			code: 'INVALID_REQUEST',
+			code: STANDARD_ERROR_CODES.INVALID_REQUEST,
 		});
 	}
 
 	if (status !== undefined && (!JOB_STATUSES.has(status) || typeof status !== 'string')) {
-		return res.status(400).json({
+		return sendErrorFrom(res, 400, {
 			error: 'Invalid status filter.',
-			code: 'INVALID_REQUEST',
+			code: STANDARD_ERROR_CODES.INVALID_REQUEST,
 		});
 	}
 
 	if (type !== undefined && (!JOB_TYPES.has(type) || typeof type !== 'string')) {
-		return res.status(400).json({
+		return sendErrorFrom(res, 400, {
 			error: 'Invalid type filter.',
-			code: 'INVALID_REQUEST',
+			code: STANDARD_ERROR_CODES.INVALID_REQUEST,
 		});
 	}
 
@@ -105,9 +148,9 @@ async function getJobList(req, res) {
 			},
 		});
 
-		return res.status(500).json({
+		return sendErrorFrom(res, 500, {
 			error: 'Internal server error',
-			code: 'INTERNAL_ERROR',
+			code: STANDARD_ERROR_CODES.INTERNAL_ERROR,
 		});
 	}
 }
@@ -116,9 +159,9 @@ async function getJobStatus(req, res) {
 	const { jobId } = req.params;
 
 	if (!jobId) {
-		return res.status(400).json({
+		return sendErrorFrom(res, 400, {
 			error: 'Missing jobId parameter',
-			code: 'INVALID_REQUEST',
+			code: STANDARD_ERROR_CODES.INVALID_REQUEST,
 		});
 	}
 
@@ -126,7 +169,7 @@ async function getJobStatus(req, res) {
 		const job = await jobService.getJob(jobId);
 
 		if (!job) {
-			return res.status(404).json({
+			return sendErrorFrom(res, 404, {
 				success: false,
 				error: 'Job not found',
 			});
@@ -148,9 +191,9 @@ async function getJobStatus(req, res) {
 			},
 		});
 
-		return res.status(500).json({
+		return sendErrorFrom(res, 500, {
 			error: 'Internal server error',
-			code: 'INTERNAL_ERROR',
+			code: STANDARD_ERROR_CODES.INTERNAL_ERROR,
 		});
 	}
 }
@@ -159,9 +202,9 @@ async function postCancelJob(req, res) {
 	const { jobId } = req.params;
 
 	if (!jobId) {
-		return res.status(400).json({
+		return sendErrorFrom(res, 400, {
 			error: 'Missing jobId parameter',
-			code: 'INVALID_REQUEST',
+			code: STANDARD_ERROR_CODES.INVALID_REQUEST,
 		});
 	}
 
@@ -169,14 +212,14 @@ async function postCancelJob(req, res) {
 		const result = await jobService.cancelJob(jobId);
 
 		if (!result) {
-			return res.status(404).json({
+			return sendErrorFrom(res, 404, {
 				success: false,
 				error: 'Job not found',
 			});
 		}
 
 		if (!result.success) {
-			return res.status(409).json({
+			return sendErrorFrom(res, 409, {
 				success: false,
 				error: result.message,
 				code: result.code,
@@ -197,9 +240,9 @@ async function postCancelJob(req, res) {
 			},
 		});
 
-		return res.status(500).json({
+		return sendErrorFrom(res, 500, {
 			error: 'Internal server error',
-			code: 'INTERNAL_ERROR',
+			code: STANDARD_ERROR_CODES.INTERNAL_ERROR,
 		});
 	}
 }
@@ -209,9 +252,9 @@ function postRetryJob(botOrGetter) {
 		const { jobId } = req.params;
 
 		if (!jobId) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: 'Missing jobId parameter',
-				code: 'INVALID_REQUEST',
+				code: STANDARD_ERROR_CODES.INVALID_REQUEST,
 			});
 		}
 
@@ -219,14 +262,14 @@ function postRetryJob(botOrGetter) {
 			const result = await jobService.retryJob(jobId, botOrGetter);
 
 			if (!result) {
-				return res.status(404).json({
+				return sendErrorFrom(res, 404, {
 					success: false,
 					error: 'Job not found',
 				});
 			}
 
 			if (!result.success) {
-				return res.status(409).json({
+				return sendErrorFrom(res, 409, {
 					success: false,
 					error: result.message,
 					code: result.code,
@@ -246,9 +289,9 @@ function postRetryJob(botOrGetter) {
 				},
 			});
 
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error',
-				code: 'INTERNAL_ERROR',
+				code: STANDARD_ERROR_CODES.INTERNAL_ERROR,
 			});
 		}
 	};
@@ -259,9 +302,9 @@ function postRetryFailedJob(botOrGetter) {
 		const { jobId } = req.params;
 
 		if (!jobId) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: 'Missing jobId parameter',
-				code: 'INVALID_REQUEST',
+				code: STANDARD_ERROR_CODES.INVALID_REQUEST,
 			});
 		}
 
@@ -269,7 +312,7 @@ function postRetryFailedJob(botOrGetter) {
 			const result = await jobService.retryFailedJob(jobId, botOrGetter);
 
 			if (!result) {
-				return res.status(404).json({
+				return sendErrorFrom(res, 404, {
 					success: false,
 					error: 'Job not found',
 				});
@@ -277,7 +320,7 @@ function postRetryFailedJob(botOrGetter) {
 
 			if (!result.success) {
 				const statusCode = result.code === 'NO_FAILED_ITEMS' ? 400 : 409;
-				return res.status(statusCode).json({
+				return sendErrorFrom(res, statusCode, {
 					success: false,
 					error: result.message,
 					code: result.code,
@@ -297,9 +340,9 @@ function postRetryFailedJob(botOrGetter) {
 				},
 			});
 
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error',
-				code: 'INTERNAL_ERROR',
+				code: STANDARD_ERROR_CODES.INTERNAL_ERROR,
 			});
 		}
 	};

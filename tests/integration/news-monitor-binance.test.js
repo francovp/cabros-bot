@@ -6,7 +6,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { getCacheInstance } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
 
 jest.mock('../../src/services/grounding/gemini');
@@ -36,6 +36,7 @@ describe('News Monitor - Binance Integration (US4)', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 
 		// Mock Gemini for symbol analysis
 		const gemini = require('../../src/services/grounding/gemini');
@@ -229,10 +230,10 @@ describe('News Monitor - Binance Integration (US4)', () => {
 			}));
 			jest.doMock('../../src/services/grounding/gemini', () => ({
 				analyzeNewsForSymbol: jest.fn().mockResolvedValue({
-					event_category: 'price_surge',
+					event_category: 'price_drop',
 					event_significance: 0.8,
-					sentiment_score: 0.9,
-					headline: 'Bitcoin surges on positive news',
+					sentiment_score: -0.9,
+					headline: 'Bitcoin drops on negative news',
 					confidence: 0.95,
 					sources: ['https://example.com/news'],
 				}),
@@ -270,9 +271,8 @@ describe('News Monitor - Binance Integration (US4)', () => {
 					symbol: 'BTCUSDT',
 					exchange: 'BINANCE',
 					priceSource: 'binance',
-					side: 'BUY',
-					stop: 75992.54236043,
-					target: 79869.71288903,
+					side: 'SELL',
+					score: -0.95,
 				}));
 			} finally {
 				cache.shutdown();

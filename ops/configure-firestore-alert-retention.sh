@@ -14,7 +14,7 @@ fi
 
 FIREBASE_PROJECT_ID="$project" node ops/backfill-firestore-alert-retention.js
 
-for collection_group in alerts alertReplays tradingviewJobs; do
+for collection_group in alerts alertReplays alertAcknowledgements tradingviewJobs; do
 	gcloud firestore fields ttls update expiresAt \
 		--collection-group="$collection_group" \
 		--enable-ttl \

@@ -120,9 +120,20 @@ functions/.eslintcache
 
 .pnpm-store/
 
+# Local Firestore backup artifacts
+backups/
+
 context/
 
 docs/antigravity/
 
 docs/superpowers/
 .omo/
+.impeccable/
+
+# Local browser verification artifacts
+.playwright-cli/
+output/playwright/
+
+# Backlog hygiene report artifact
+backlog-report.md
