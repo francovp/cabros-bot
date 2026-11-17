@@ -46,6 +46,9 @@ const VALID_WINDOWS = {
 	'1w': '1W',
 	'1M': '1M',
 };
+const VALID_GROUP_BY_AXES = new Set(['setupType', 'timeframe', 'exchange', 'window']);
+const VALID_COMPARE_MODES = new Set(['last7d', 'previous7d']);
+const MAX_GROUP_BY_AXES = 2;
 
 function parseLimit(rawLimit) {
 	if (rawLimit === undefined) {
@@ -222,6 +225,86 @@ function parseOptionalTimestamp(rawValue, name) {
 	return { value: new Date(rawValue).toISOString() };
 }
 
+function parseGroupBy(rawGroupBy) {
+	const list = Array.isArray(rawGroupBy)
+		? rawGroupBy
+		: (rawGroupBy === undefined || rawGroupBy === null ? [] : [rawGroupBy]);
+	if (list.length === 0) {
+		return { value: [] };
+	}
+	const supported = Array.from(VALID_GROUP_BY_AXES).join(', ');
+	const normalized = [];
+	for (const entry of list) {
+		if (typeof entry !== 'string' || !entry.trim()) {
+			return {
+				error: {
+					error: `Invalid groupBy. Provide one or two axes from: ${supported}.`,
+					code: 'INVALID_REQUEST',
+				},
+			};
+		}
+		const axis = entry.trim();
+		let canonical = null;
+		for (const candidate of VALID_GROUP_BY_AXES) {
+			if (candidate.toLowerCase() === axis.toLowerCase()) {
+				canonical = candidate;
+				break;
+			}
+		}
+		if (!canonical) {
+			return {
+				error: {
+					error: `Invalid groupBy. Provide one or two axes from: ${supported}.`,
+					code: 'INVALID_REQUEST',
+				},
+			};
+		}
+		if (!normalized.includes(canonical)) {
+			normalized.push(canonical);
+		}
+	}
+	if (normalized.length > MAX_GROUP_BY_AXES) {
+		return {
+			error: {
+				error: `Invalid groupBy. Provide at most ${MAX_GROUP_BY_AXES} axes.`,
+				code: 'INVALID_REQUEST',
+			},
+		};
+	}
+	return { value: normalized };
+}
+
+function parseCompare(rawCompare) {
+	if (rawCompare === undefined || rawCompare === null || rawCompare === '') {
+		return { value: undefined };
+	}
+	if (typeof rawCompare !== 'string') {
+		return {
+			error: {
+				error: `Invalid compare. Use one of: ${Array.from(VALID_COMPARE_MODES).join(', ')}.`,
+				code: 'INVALID_REQUEST',
+			},
+		};
+	}
+	const trimmed = rawCompare.trim();
+	let canonical = null;
+	for (const candidate of VALID_COMPARE_MODES) {
+		if (candidate.toLowerCase() === trimmed.toLowerCase()) {
+			canonical = candidate;
+			break;
+		}
+	}
+	if (!canonical) {
+		return {
+			error: {
+				error: `Invalid compare. Use one of: ${Array.from(VALID_COMPARE_MODES).join(', ')}.`,
+				code: 'INVALID_REQUEST',
+			},
+		};
+	}
+	return { value: canonical };
+}
+
 function listOutcomes(req, res) {
 	return handleAsync(req, res, '/api/outcomes', async () => {
 		if (!signalOutcomeService.isEnabled()) {
@@ -379,6 +462,23 @@ function summarizeOutcomes(req, res) {
 			? req.query.exchange.trim()
 			: undefined;
 
+		const groupBy = parseGroupBy(req.query.groupBy);
+		if (groupBy.error) {
+			return sendErrorFrom(res, 400, groupBy.error);
+		}
+
+		const compare = parseCompare(req.query.compare);
+		if (compare.error) {
+			return sendErrorFrom(res, 400, compare.error);
+		}
+
+		if (compare.value && (from.value || to.value)) {
+			return sendErrorFrom(res, 400, {
+				error: 'compare=last7d cannot be combined with from/to filters; pick one or the other so the baseline window stays unambiguous.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
 		let setupType;
 		if (req.query.setupType !== undefined) {
 			if (typeof req.query.setupType !== 'string' || !req.query.setupType.trim()) {
@@ -408,6 +508,8 @@ function summarizeOutcomes(req, res) {
 			window,
 			from: from.value,
 			to: to.value,
+			...(groupBy.value.length > 0 ? { groupBy: groupBy.value } : {}),
+			...(compare.value !== undefined ? { compare: compare.value } : {}),
 		};
 		const summary = await signalOutcomeService.summarizeOutcomes(summaryParams);
 
@@ -720,4 +822,9 @@ module.exports = {
 	parseWindow,
 	parseTrendWindow,
 	parseOptionalTimestamp,
+	parseGroupBy,
+	parseCompare,
+	VALID_GROUP_BY_AXES,
+	VALID_COMPARE_MODES,
+	MAX_GROUP_BY_AXES,
 };
