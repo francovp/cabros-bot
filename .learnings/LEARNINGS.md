@@ -768,3 +768,70 @@ Review the feedback and implement necessary changes.
 - Pattern-Key: harden.feedback_response
 
 ---
+
+---
+
+## [LRN-20261117-154500-001] correction
+
+**Logged**: 2026-11-17T15:45:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+PR #1018 (CSP/security headers for Firebase Hosting) turns a latent `build:hosting` break into a red test — conflict resolution in `README.md` introduces test failure despite correct security payload.
+
+### Details
+On PR #1018 (feat(security): add CSP and security headers to Firebase Hosting admin responses), @francovp issued a holding review:
+
+> ## Holding — the security payload is correct, but this PR turns a latent `build:hosting` break into a red test
+>
+> I resolved the conflicts and validated the actual change. The CSP work itself is good; the blocker is one level below it.
+>
+> The conflict resolution is tractable and I completed it locally (not pushed). `README.md` was the only conflicting file, and the conflict was `ours=1344 lines` vs `theirs=1 line` — master deleted that whole block in the post-`#1133` split. Master's structure is correct, so I took it and relocated this PR's single added line (`- **Static-hosting security headers**: ...`) into `docs/api-reference.md`, in the `### Firebase Hosting for Admin Console` section right after the `**CORS & CSP Policy**:` bullet, which is where that context belongs.
+
+The PR's CSP implementation is correct, but the merge conflict resolution against master (which had deleted the README section in PR #1133) caused a test failure in `build:hosting`. The fix required relocating the documentation line to `docs/api-reference.md` instead of `README.md`.
+
+### Suggested Action
+When resolving merge conflicts against a moving master branch, verify that conflict resolution does not introduce test regressions in adjacent systems (here: the hosting build test). Prefer relocating documentation to stable locations (`docs/`) over frequently rebased files (`README.md`). Run the full test suite including build/hosting tests after conflict resolution.
+
+### Metadata
+- Source: github_review
+- Related Files: scripts/build-hosting.js, tests/unit/firebase-hosting-config.test.js, docs/api-reference.md, README.md
+- Tags: backend, firebase-hosting, csp, merge-conflicts, test-regression, documentation
+- See Also: PR #1018, PR #1133
+- Pattern-Key: harden.merge_conflict_test_regression
+
+---
+
+## [LRN-20261117-154500-002] correction
+
+**Logged**: 2026-11-17T15:45:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+PR #969 idempotency key is threaded and echoed but not consumed — observable only, cannot prevent duplicate sends; enforcement layer missing.
+
+### Details
+On PR #969 (feat(notification): thread deterministic idempotency keys through redrive dispatches), @francovp issued a holding review:
+
+> ## Holding — the key is threaded and echoed, but nothing consumes it, so it cannot prevent a duplicate send
+>
+> I traced the key end to end. The P1 is correct: this change makes the idempotency key **observable**, not **enforcing**.
+>
+> What the PR does: `src/services/notification/requestRouting.js` validates an override and attaches it to the payload (enforcing a 256-char cap, setting `alertPayload.idempotencyKey`). `NotificationManager` then resolves an effective key per dispatch and per channel via `resolveIdempotencyKey()` and echoes it in `buildSendResultShell()`, but no downstream consumer (Telegram, WhatsApp, or webhook dispatchers) uses the key to deduplicate sends.
+
+The PR correctly threads the idempotency key through the routing and notification layers, but the enforcement — actually using the key to prevent duplicate deliveries at the channel adapter level — was not implemented. The key is observable in logs and response shells but provides no deduplication guarantee.
+
+### Suggested Action
+When implementing idempotency for notification channels, the key must be consumed by each channel adapter (TelegramService.sendMessage, WhatsAppService.sendMessage, webhook dispatchers) to deduplicate at the point of send. Threading the key through routing is necessary but not sufficient. Add a per-channel idempotency store (in-memory with TTL matching the alert retry window) and check/record before each external API call.
+
+### Metadata
+- Source: github_review
+- Related Files: src/services/notification/requestRouting.js, src/services/notification/NotificationManager.js, src/services/telegram/TelegramService.js, src/services/whatsapp/WhatsAppService.js
+- Tags: backend, notifications, idempotency, deduplication, channel-adapters, enforcement-gap
+- See Also: PR #969, Issue #785
+- Pattern-Key: harden.idempotency_enforcement_gap
+
