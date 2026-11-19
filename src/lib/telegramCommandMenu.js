@@ -7,6 +7,7 @@ const TELEGRAM_COMMAND_MENU = Object.freeze([
 	{ command: 'scanner', description: 'Escaneo de mercado en TradingView' },
 	{ command: 'noticias', description: 'Monitor y análisis de noticias con IA' },
 	{ command: 'outcomes', description: 'Rendimiento reciente de señales evaluadas' },
+	{ command: 'top', description: 'Ranking de setups por expectancy y hit rate' },
 	{ command: 'history', description: 'Consulta alertas recientes' },
 	{ command: 'preferencias', description: 'Preferencias de alertas para este chat' },
 	{ command: 'watchlist', description: 'Gestiona símbolos de interés para este chat' },

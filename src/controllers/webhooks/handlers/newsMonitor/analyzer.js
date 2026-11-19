@@ -1455,6 +1455,9 @@ class NewsAnalyzer {
 					barriers,
 					sources: alert.sources || [],
 					tokenUsage: alert.enriched ? alert.enriched.tokenUsage : null,
+					...(alert.enriched?.promptProvenance
+						? { promptProvenance: alert.enriched.promptProvenance }
+						: (alert.enriched?.prompt_provenance ? { promptProvenance: alert.enriched.prompt_provenance } : {})),
 				}).catch(() => {});
 			}
 		}
@@ -1980,6 +1983,7 @@ class NewsAnalyzer {
 				timeHorizon: geminiAnalysis.time_horizon || 'short_term',
 			};
 		}
+		const promptProvenance = geminiAnalysis?.promptProvenance || geminiAnalysis?.prompt_provenance || null;
 		const enriched = {
 			originalText: alertTitle,
 			summary: context,
@@ -1989,6 +1993,7 @@ class NewsAnalyzer {
 			time_horizon: geminiAnalysis.time_horizon,
 			invalidation_hint: geminiAnalysis.invalidation_hint,
 			barriers,
+			...(promptProvenance ? { promptProvenance } : {}),
 		};
 
 		return {

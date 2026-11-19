@@ -5,6 +5,7 @@ const signalOutcomeService = require('../../services/storage/SignalOutcomeServic
 const alertAcknowledgementService = require('../../services/storage/AlertAcknowledgementService');
 const { parseAlertPaginationCursor } = require('../../services/storage/alertPaginationCursor');
 const { sendErrorFrom, STANDARD_ERROR_CODES } = require('../../lib/errorEnvelope');
+const { normalizeLeaderboardOptions } = require('../../services/storage/outcomesLeaderboard');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -747,9 +748,76 @@ function getOutcomesTrend(req, res) {
 	});
 }
 
+/**
+ * GET /api/outcomes/leaderboard - Ranked, statistically-guarded cohort leaderboard.
+ */
+function getOutcomesLeaderboard(req, res) {
+	return handleAsync(req, res, '/api/outcomes/leaderboard', async () => {
+		const trackingEnabled = signalOutcomeService.isEnabled();
+		const leaderboardEnabled = typeof signalOutcomeService.isLeaderboardEnabled !== 'function'
+			|| signalOutcomeService.isLeaderboardEnabled();
+		if (!trackingEnabled || !leaderboardEnabled) {
+			return sendErrorFrom(res, 403, {
+				error: !trackingEnabled
+					? 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.'
+					: 'Outcomes leaderboard feature is disabled by runtime configuration (ENABLE_OUTCOMES_LEADERBOARD=false).',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+
+		const query = req.query || {};
+		const nowMs = Date.now();
+		let parsed;
+		try {
+			parsed = normalizeLeaderboardOptions({
+				groupBy: query.groupBy,
+				window: query.window,
+				minTrades: query.minTrades,
+				sort: query.sort,
+				order: query.order,
+				limit: query.limit,
+				from: query.from,
+				to: query.to,
+			}, nowMs);
+		} catch (validationError) {
+			return sendErrorFrom(res, 400, {
+				error: validationError.message,
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const requestId = req.requestId || (typeof res.getHeader === 'function' ? res.getHeader('X-Request-Id') : null) || null;
+		const leaderboard = await signalOutcomeService.getOutcomesLeaderboard({
+			groupBy: parsed.groupBy,
+			window: parsed.window,
+			minTrades: parsed.minTrades,
+			sort: parsed.sort,
+			order: parsed.order,
+			limit: parsed.limit,
+			from: query.from ? parsed.parsedFrom.toISOString() : undefined,
+			to: query.to ? parsed.parsedTo.toISOString() : undefined,
+			nowMs,
+			requestId,
+			signal: req.requestDeadlineSignal || req.abortSignal || null,
+		});
+
+		return res.status(200).json({
+			...leaderboard,
+			requestId: requestId || leaderboard?.requestId || null,
+		});
+	});
+}
+
 function handleAsync(req, res, endpoint, handler) {
 	return Promise.resolve(handler()).catch((error) => {
-		if (error.code === 'ABORTED' && req.requestDeadlineSignal?.aborted) return undefined;
+		const deadlineAborted = Boolean(req.requestDeadlineSignal?.aborted || req.requestDeadlineExceeded);
+		if (deadlineAborted && (
+			error.code === 'ABORTED'
+			|| error.name === 'AbortError'
+			|| error === req.requestDeadlineSignal?.reason
+		)) {
+			return undefined;
+		}
 		console.error('[OutcomesController] Request failed:', error.message);
 		const statusCode = error.statusCode || error.status || (error.code === signalOutcomeService.STORAGE_UNAVAILABLE_CODE ? 503 : (error.code === 'INVALID_REQUEST' ? 400 : 500));
 		sentryService.captureRuntimeError({
@@ -806,6 +874,7 @@ module.exports = {
 	summarizeOutcomes,
 	getOutcomesCalibration,
 	getOutcomesTrend,
+	getOutcomesLeaderboard,
 	getOutcomeById,
 	exportOutcomes,
 	parseLimit,

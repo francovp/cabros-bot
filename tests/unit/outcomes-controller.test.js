@@ -6,6 +6,7 @@ const {
 	summarizeOutcomes,
 	getOutcomesCalibration,
 	getOutcomesTrend,
+	getOutcomesLeaderboard,
 	getOutcomeById,
 	exportOutcomes,
 	parseExportLimit,
@@ -26,8 +27,10 @@ const sentryService = require('../../src/services/monitoring/SentryService');
 
 jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	isEnabled: jest.fn(),
+	isLeaderboardEnabled: jest.fn(() => true),
 	listOutcomes: jest.fn(),
 	summarizeOutcomes: jest.fn(),
+	getOutcomesLeaderboard: jest.fn(),
 	getOutcomesCalibration: jest.fn(),
 	getOutcomesTrend: jest.fn(),
 	getOutcomeById: jest.fn(),
@@ -1604,6 +1607,118 @@ describe('Outcomes Controller Unit Tests', () => {
 			const res = httpMocks.createResponse();
 
 			await getOutcomesTrend(req, res);
+
+			expect(res.statusCode).toBe(503);
+			expect(res._getJSONData().code).toBe('STORAGE_UNAVAILABLE');
+		});
+	});
+
+	describe('getOutcomesLeaderboard', () => {
+		it('returns 403 when feature is disabled or Remote Config disables leaderboard', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(false);
+			const req1 = httpMocks.createRequest({ method: 'GET', url: '/api/outcomes/leaderboard' });
+			const res1 = httpMocks.createResponse();
+			await getOutcomesLeaderboard(req1, res1);
+			expect(res1.statusCode).toBe(403);
+			expect(res1._getJSONData().code).toBe('FEATURE_DISABLED');
+			expect(res1._getJSONData().error).toContain('ENABLE_SIGNAL_OUTCOME_TRACKING=true');
+
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.isLeaderboardEnabled.mockReturnValueOnce(false);
+			const req2 = httpMocks.createRequest({ method: 'GET', url: '/api/outcomes/leaderboard' });
+			const res2 = httpMocks.createResponse();
+			await getOutcomesLeaderboard(req2, res2);
+			expect(res2.statusCode).toBe(403);
+			expect(res2._getJSONData().code).toBe('FEATURE_DISABLED');
+			expect(res2._getJSONData().error).toContain('ENABLE_OUTCOMES_LEADERBOARD=false');
+		});
+
+		it('returns 400 INVALID_REQUEST on invalid sort, minTrades > 1000, limit > 100, or > 31 day range', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.isLeaderboardEnabled.mockReturnValue(true);
+
+			const badQueries = [
+				{ sort: 'sharpe' },
+				{ minTrades: '1001' },
+				{ limit: '101' },
+				{ groupBy: 'bogus' },
+				{ window: '5m' },
+				{ from: '2026-07-01T00:00:00.000Z', to: '2026-08-15T00:00:00.000Z' },
+			];
+
+			for (const query of badQueries) {
+				const req = httpMocks.createRequest({
+					method: 'GET',
+					url: '/api/outcomes/leaderboard',
+					query,
+				});
+				const res = httpMocks.createResponse();
+				await getOutcomesLeaderboard(req, res);
+				expect(res.statusCode).toBe(400);
+				expect(res._getJSONData().code).toBe('INVALID_REQUEST');
+			}
+		});
+
+		it('returns 200 with ranked leaderboard and passes normalized params', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.isLeaderboardEnabled.mockReturnValue(true);
+			signalOutcomeService.getOutcomesLeaderboard.mockResolvedValue({
+				success: true,
+				groupBy: ['setupType', 'side'],
+				window: '1D',
+				ranked: [{ rank: 1, key: 'pullback:BUY', trades: 42 }],
+				excludedBelowThreshold: 1,
+				unreliableCohorts: [{ key: 'scalp:SELL', trades: 4, reason: 'below minTrades=10' }],
+				warnings: [],
+			});
+
+			const controller = new AbortController();
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/leaderboard',
+				requestId: 'req-lb-ctrl',
+				requestDeadlineSignal: controller.signal,
+				query: {
+					groupBy: ['setupType', 'side'],
+					window: '1d',
+					minTrades: '10',
+					sort: 'hitRate',
+					order: 'asc',
+					limit: '15',
+				},
+			});
+			const res = httpMocks.createResponse();
+
+			await getOutcomesLeaderboard(req, res);
+
+			expect(res.statusCode).toBe(200);
+			const data = res._getJSONData();
+			expect(data.success).toBe(true);
+			expect(data.requestId).toBe('req-lb-ctrl');
+			expect(data.ranked).toHaveLength(1);
+			expect(signalOutcomeService.getOutcomesLeaderboard).toHaveBeenCalledWith(expect.objectContaining({
+				groupBy: ['setupType', 'side'],
+				window: '1D',
+				minTrades: 10,
+				sort: 'hitRate',
+				order: 'asc',
+				limit: 15,
+				requestId: 'req-lb-ctrl',
+				signal: controller.signal,
+				nowMs: expect.any(Number),
+			}));
+		});
+
+		it('returns 503 STORAGE_UNAVAILABLE when Firestore is unavailable', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.isLeaderboardEnabled.mockReturnValue(true);
+			const error = new Error('Firestore down');
+			error.code = 'STORAGE_UNAVAILABLE';
+			signalOutcomeService.getOutcomesLeaderboard.mockRejectedValue(error);
+
+			const req = httpMocks.createRequest({ method: 'GET', url: '/api/outcomes/leaderboard' });
+			const res = httpMocks.createResponse();
+			await getOutcomesLeaderboard(req, res);
 
 			expect(res.statusCode).toBe(503);
 			expect(res._getJSONData().code).toBe('STORAGE_UNAVAILABLE');

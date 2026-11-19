@@ -26,7 +26,9 @@ jest.mock('../../src/services/monitoring/SentryService', () => ({
 
 jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	isEnabled: jest.fn(),
+	isLeaderboardEnabled: jest.fn(() => true),
 	listOutcomes: jest.fn(),
+	getOutcomesLeaderboard: jest.fn(),
 	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
 }));
 
@@ -57,6 +59,7 @@ const {
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	topCommand,
 	pretradeCheckCommand,
 	buildHelpMessage,
 	getTelegramCommandMenu,
@@ -890,6 +893,7 @@ describe('Telegram TradingView commands', () => {
 				{ command: 'scanner', description: 'Escaneo de mercado en TradingView' },
 				{ command: 'noticias', description: 'Monitor y análisis de noticias con IA' },
 				{ command: 'outcomes', description: 'Rendimiento reciente de señales evaluadas' },
+				{ command: 'top', description: 'Ranking de setups por expectancy y hit rate' },
 				{ command: 'history', description: 'Consulta alertas recientes' },
 				{ command: 'preferencias', description: 'Preferencias de alertas para este chat' },
 				{ command: 'watchlist', description: 'Gestiona símbolos de interés para este chat' },
@@ -919,6 +923,7 @@ describe('Telegram TradingView commands', () => {
 			expect(message).toContain('/news');
 			expect(message).toContain('/outcomes');
 			expect(message).toContain('/rendimiento');
+			expect(message).toContain('/top');
 			expect(message).toContain('/jobs');
 			expect(message).toContain('/trabajos');
 			expect(message).toContain('/history');
@@ -1405,6 +1410,174 @@ describe('Telegram TradingView commands', () => {
 
 			expect(context.reply).toHaveBeenCalledTimes(1);
 			expect(context.reply.mock.calls[0][0]).toContain('Sin snapshots diarios de resultados todavía');
+		});
+	});
+
+	describe('topCommand', () => {
+		beforeEach(() => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.isLeaderboardEnabled.mockReturnValue(true);
+		});
+
+		it('replies with disabled message matching /outcomes when tracking is off or Remote Config disables leaderboard', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(false);
+			const ctx = buildContext('/top');
+			await topCommand(ctx);
+			expect(ctx.reply).toHaveBeenCalledWith(
+				'El seguimiento de resultados de señales está desactivado — pide a un operador que active ENABLE_SIGNAL_OUTCOME_TRACKING',
+			);
+
+			ctx.reply.mockClear();
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.isLeaderboardEnabled.mockReturnValue(false);
+			await topCommand(ctx);
+			expect(ctx.reply).toHaveBeenCalledWith(
+				'El seguimiento de resultados de señales está desactivado — pide a un operador que active ENABLE_SIGNAL_OUTCOME_TRACKING',
+			);
+		});
+
+		it('replies with MarkdownV2 usage hint on invalid arguments or limit > 10', async () => {
+			const ctxBad = buildContext('/top bogusAxis');
+			await topCommand(ctxBad);
+			expect(ctxBad.reply).toHaveBeenCalledWith(
+				expect.stringContaining('Uso: `/top'),
+				{ parse_mode: 'MarkdownV2' },
+			);
+
+			const ctxOver = buildContext('/top limit=15');
+			await topCommand(ctxOver);
+			expect(ctxOver.reply).toHaveBeenCalledWith(
+				expect.stringContaining('Uso: `/top'),
+				{ parse_mode: 'MarkdownV2' },
+			);
+		});
+
+		it('renders top 5 ranked entries with escaped MarkdownV2 chars and Wilson fallback when R-CI is null', async () => {
+			signalOutcomeService.getOutcomesLeaderboard.mockResolvedValueOnce({
+				groupBy: ['setupType'],
+				window: '1D',
+				minTradesApplied: 10,
+				sort: 'expectancy',
+				ranked: Array.from({ length: 5 }, (_, idx) => ({
+					rank: idx + 1,
+					key: idx === 0 ? 'pullback_v2+BTC.USDT-1D' : `setup-${idx + 1}`,
+					trades: 40 - idx,
+					hitRate: 0.65 - (idx * 0.05),
+					hitRateCI95: { lower: 0.45, upper: 0.78 },
+					expectancyR: idx === 1 ? null : 0.42 - (idx * 0.2),
+					expectancyRCI95: idx === 1 ? null : { lower: 0.1 - (idx * 0.15), upper: 0.74 - (idx * 0.15) },
+					isStatisticallyReliable: idx === 0,
+				})),
+				excludedBelowThreshold: 2,
+				coverage: { truncatedByScanLimit: true },
+			});
+
+			const ctx = buildContext('/top');
+			await topCommand(ctx);
+
+			expect(signalOutcomeService.getOutcomesLeaderboard).toHaveBeenCalledWith(expect.objectContaining({
+				groupBy: ['setupType'],
+				window: '1D',
+				minTrades: 10,
+				limit: 5,
+				signal: expect.any(Object),
+			}));
+			expect(ctx.reply).toHaveBeenCalledWith(expect.any(String), { parse_mode: 'MarkdownV2' });
+			const message = ctx.reply.mock.calls[0][0];
+			expect(message).toContain('*🏆 Top Outcomes \\(1D\\)*');
+			expect(message).toContain('`#1` ✅ *pullback\\_v2\\+BTC\\.USDT\\-1D*');
+			expect(message).toContain('CI Wilson \\[45%, 78%\\]');
+			expect(message).toContain('`#5` ⚠️ *setup\\-5*');
+			expect(message).toContain('2 cohortes bajo `minTrades=10` excluidas');
+			expect(message).toContain('límite de 1000 señales del rango\\.');
+
+			// Ensure unescaped parentheses outside backticks never leak into MarkdownV2 text
+			for (const line of message.split('\n')) {
+				const withoutCode = line.replace(/`[^`]+`/g, '');
+				expect(withoutCode).not.toMatch(/(?<!\\)[()]/);
+			}
+		});
+
+		it('parses optional positional and key=value filters and shows truncation notice on empty result', async () => {
+			signalOutcomeService.getOutcomesLeaderboard.mockResolvedValueOnce({
+				groupBy: ['exchange'],
+				window: '4h',
+				minTradesApplied: 25,
+				sort: 'expectancy',
+				ranked: [],
+				excludedBelowThreshold: 3,
+				coverage: { truncatedByScanLimit: true },
+			});
+
+			const ctx = buildContext('/top exchange window=4h minTrades=25 limit=10');
+			await topCommand(ctx);
+
+			expect(signalOutcomeService.getOutcomesLeaderboard).toHaveBeenCalledWith(expect.objectContaining({
+				groupBy: ['exchange'],
+				window: '4h',
+				minTrades: 25,
+				limit: 10,
+			}));
+			const replyMsg = ctx.reply.mock.calls[0][0];
+			expect(replyMsg).toContain('Sin cohortes con al menos 25 trades evaluados en 4h\\.');
+			expect(replyMsg).toContain('límite de 1000 señales del rango\\.');
+		});
+
+		it('handles maintenance mode, timeout without Sentry noise, and unexpected error with canonical Sentry capture', async () => {
+			const previous = process.env.ENABLE_MAINTENANCE_MODE;
+			process.env.ENABLE_MAINTENANCE_MODE = 'true';
+			try {
+				const ctx = {
+					...buildContext('/top'),
+					chat: { id: 999826, type: 'private' },
+				};
+				await topCommand(ctx);
+				expect(ctx.reply).toHaveBeenCalledTimes(1);
+				expect(signalOutcomeService.getOutcomesLeaderboard).not.toHaveBeenCalled();
+			} finally {
+				if (previous === undefined) delete process.env.ENABLE_MAINTENANCE_MODE;
+				else process.env.ENABLE_MAINTENANCE_MODE = previous;
+			}
+
+			captureRuntimeError.mockClear();
+			const timeoutError = new Error('Top leaderboard query timed out');
+			timeoutError.name = 'TimeoutError';
+			timeoutError.code = 'TIMEOUT';
+			signalOutcomeService.getOutcomesLeaderboard.mockRejectedValueOnce(timeoutError);
+			const ctxTimeout = buildContext('/top');
+			await topCommand(ctxTimeout);
+			expect(captureRuntimeError).not.toHaveBeenCalled();
+			expect(ctxTimeout.reply).toHaveBeenCalledWith(
+				'No pude consultar el leaderboard de resultados ahora mismo. Intenta nuevamente más tarde.',
+			);
+
+			captureRuntimeError.mockClear();
+			const unexpected = new Error('Unexpected failure');
+			signalOutcomeService.getOutcomesLeaderboard.mockRejectedValueOnce(unexpected);
+			const ctxErr = buildContext('/top');
+			await topCommand(ctxErr);
+			expect(captureRuntimeError).toHaveBeenCalledWith(expect.objectContaining({
+				channel: 'telegram',
+				error: unexpected,
+				feature: 'telegram-commands',
+				extra: expect.objectContaining({ command: 'topCommand' }),
+			}));
+			expect(ctxErr.reply).toHaveBeenCalledWith(
+				'No pude consultar el leaderboard de resultados ahora mismo. Intenta nuevamente más tarde.',
+			);
+		});
+
+		it('handles STORAGE_UNAVAILABLE gracefully with fail-open message', async () => {
+			const error = new Error('Firestore down');
+			error.code = 'STORAGE_UNAVAILABLE';
+			signalOutcomeService.getOutcomesLeaderboard.mockRejectedValueOnce(error);
+
+			const ctx = buildContext('/top');
+			await topCommand(ctx);
+
+			expect(ctx.reply).toHaveBeenCalledWith(
+				'El almacenamiento de resultados no está disponible en este momento. Intenta nuevamente más tarde.',
+			);
 		});
 	});
 

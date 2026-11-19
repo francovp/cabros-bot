@@ -777,6 +777,13 @@
       "description": "Bounded lookup timeout for the outcome annotation query, in milliseconds (range: 50-10000)",
       "valueType": "NUMBER"
     },
+    "ENABLE_OUTCOMES_LEADERBOARD": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Runtime kill-switch for GET /api/outcomes/leaderboard and Telegram /top (defaults to true when ENABLE_SIGNAL_OUTCOME_TRACKING=true)",
+      "valueType": "BOOLEAN"
+    },
     "ENABLE_ALERT_CROSS_TF_SUPPRESSION": {
       "defaultValue": {
         "value": "false"

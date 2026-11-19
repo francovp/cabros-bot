@@ -46,6 +46,7 @@ const {
 const {
 	listOutcomes,
 	summarizeOutcomes,
+	getOutcomesLeaderboard,
 	getOutcomesCalibration,
 	getOutcomesTrend,
 	getOutcomeById,
@@ -147,6 +148,7 @@ function getRoutes(botOrGetter) {
 	router.get('/admin/events', ...sseRead, handleSseStream);
 	router.get('/outcomes', ...adminRead, listOutcomes);
 	router.get('/outcomes/summary', ...adminRead, summarizeOutcomes);
+	router.get('/outcomes/leaderboard', ...adminRead, getOutcomesLeaderboard);
 	router.get('/pretrade-check', ...adminRead, getPretradeCheckHandler());
 	router.get('/portfolio/snapshot', ...adminRead, getPortfolioSnapshot);
 	router.get('/outcomes/trend', ...adminRead, getOutcomesTrend);

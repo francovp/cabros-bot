@@ -713,6 +713,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			cloudflareAig: cloudflareAigEnabled,
 			messageFooterMetadata: messageFooterMetadataEnabled,
 			signalOutcomeTracking: signalOutcomeTrackingEnabled,
+			outcomesLeaderboard: signalOutcomeTrackingEnabled && runtimeConfig.ENABLE_OUTCOMES_LEADERBOARD !== false,
 			mcpOutcomePrices: isEnabled(process.env.ENABLE_MCP_OUTCOME_PRICES),
 			equityMarketData: equityMarketDataStatus.enabled,
 			firestoreIdempotency: idempotencyStorageService.isEnabled(),

@@ -18,6 +18,7 @@ const {
 	demoCmd,
 	startCmd,
 	outcomesCommand,
+	topCommand,
 	pretradeCheckCommand,
 	resolveCmd,
 	reactionsCommand,
@@ -223,6 +224,7 @@ async function bootstrapApplication() {
 		bot.command(['history', 'alertas'], alertHistoryCommand);
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
+		bot.command(['top'], topCommand);
 		bot.command(['demo'], demoCmd);
 		bot.command(['check', 'pretrade', 'setup'], pretradeCheckCommand);
 		bot.command(['resolve'], resolveCmd);

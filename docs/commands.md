@@ -112,6 +112,16 @@ Query recent evaluated signal outcomes for a symbol in chat (hits `GET /api/outc
 /outcomes BINANCE:BTCUSDT
 ```
 
+### /top `[setupType|symbol|exchange|side|promptSource]` `[window=1D]` `[minTrades=10]` `[limit=5]`
+
+Return the top 1–10 (default `5`) ranked signal cohorts by expectancy with Wilson 95% hit-rate intervals and normal-approximation 95% R-multiple confidence intervals (backed by `SignalOutcomeService.getOutcomesLeaderboard()`). Disabled with the same notice as `/outcomes` when `ENABLE_SIGNAL_OUTCOME_TRACKING !== 'true'` or Remote Config `ENABLE_OUTCOMES_LEADERBOARD=false`.
+
+**Examples:**
+```
+/top
+/top exchange window=4h minTrades=15 limit=5
+```
+
 ---
 
 ## WhatsApp Inbound Command Bridge

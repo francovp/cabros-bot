@@ -51,7 +51,7 @@ Each capability lists: one-line description, primary endpoint or command, status
 | Stored alert audit trail | `GET /api/alerts`, `GET /api/alerts/:id` | live | — |
 | Aggregate metrics + risk coverage | `GET /api/alerts/summary` | live | — |
 | Alert JSONL/CSV export | `GET /api/alerts/export` | live | — |
-| Outcome query + summary | `GET /api/outcomes`, `GET /api/outcomes/summary` | live | — |
+| Outcome query, summary & leaderboard | `GET /api/outcomes`, `GET /api/outcomes/summary`, `GET /api/outcomes/leaderboard` | live | #826 |
 | Replay an alert to current channels | `POST /api/alerts/:id/replay` | live | #840 |
 | Twelve Data equity outcomes | `ENABLE_EQUITY_MARKET_DATA=true` | opt-in | — |
 
@@ -79,7 +79,7 @@ Each capability lists: one-line description, primary endpoint or command, status
 | Market scanner job | `/scanner` | live | — |
 | News-monitor on-demand | `/noticias` | live | — |
 | List recent jobs | `/jobs`, `/trabajos` | live | — |
-| Signal outcomes | `/outcomes`, `/rendimiento` | live | — |
+| Signal outcomes & leaderboard | `/outcomes`, `/rendimiento`, `/top` | live | #826 |
 | Help / start | `/help`, `/start` | live | — |
 | Command allow-list gate | `TELEGRAM_COMMAND_ALLOWED_CHAT_IDS` | opt-in | #808 |
 
