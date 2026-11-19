@@ -29044,25 +29044,25 @@
               "name": "400 Invalid Parameters",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\n  \"error\": \"Invalid minTrades. Expected an integer between 1 and 1000.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+              "body": "{\n  \"error\": \"Invalid minTrades. Expected an integer between 1 and 1000.\",\n  \"code\": \"INVALID_REQUEST\",\n  \"success\": false,\n  \"requestId\": \"gh826-sample-1\",\n  \"retryable\": false\n}"
             },
             {
               "name": "401 Unauthorized",
               "status": "Unauthorized",
               "code": 401,
-              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\",\n  \"success\": false,\n  \"requestId\": \"gh826-sample-1\",\n  \"retryable\": false\n}"
             },
             {
               "name": "403 Feature Disabled",
               "status": "Forbidden",
               "code": 403,
-              "body": "{\n  \"error\": \"Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+              "body": "{\n  \"error\": \"Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\",\n  \"success\": false,\n  \"requestId\": \"gh826-sample-1\",\n  \"retryable\": false\n}"
             },
             {
               "name": "503 Storage Unavailable",
               "status": "Service Unavailable",
               "code": 503,
-              "body": "{\n  \"error\": \"Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+              "body": "{\n  \"error\": \"Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\",\n  \"success\": false,\n  \"requestId\": \"gh826-sample-1\",\n  \"retryable\": true\n}"
             }
           ],
           "event": [
@@ -29191,6 +29191,288 @@
                   "pm.test(\"X-Request-Id response header is populated\", function () {",
                   "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
                   "  pm.expect(pm.response.headers.get(\"X-Request-Id\").length).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Signal Outcomes Leaderboard - invalid minTrades [400]",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh826-sample-1",
+                "type": "text"
+              }
+            ],
+            "description": "Negative validation example confirming minTrades=0 is rejected with HTTP 400 and the standardized error envelope.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/leaderboard?minTrades=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "leaderboard"
+              ],
+              "query": [
+                {
+                  "key": "minTrades",
+                  "value": "0"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid minTrades",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid minTrades. Expected an integer between 1 and 1000.\",\n  \"code\": \"INVALID_REQUEST\",\n  \"success\": false,\n  \"requestId\": \"gh826-sample-1\",\n  \"retryable\": false\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Standard error envelope\", function () {",
+                  "  const body = pm.response.json();",
+                  "  if (body.success !== false || body.code !== \"INVALID_REQUEST\" || typeof body.error !== \"string\" || !body.error || typeof body.requestId !== \"string\" || !body.requestId || body.retryable !== false) {",
+                  "    throw new Error(\"Unexpected 400 error envelope: \" + JSON.stringify(body));",
+                  "  }",
+                  "});",
+                  "pm.test(\"X-Request-Id is present\", function () {",
+                  "  const requestId = pm.response.headers.get(\"X-Request-Id\");",
+                  "  if (typeof requestId !== \"string\" || requestId.length === 0) {",
+                  "    throw new Error(\"Missing X-Request-Id response header\");",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Signal Outcomes Leaderboard - invalid window [400]",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh826-sample-1",
+                "type": "text"
+              }
+            ],
+            "description": "Negative validation example confirming an unsupported window value (2D) is rejected with HTTP 400 and the standardized error envelope.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/leaderboard?window=2D",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "leaderboard"
+              ],
+              "query": [
+                {
+                  "key": "window",
+                  "value": "2D"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid window",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid window '2D'. Supported values: 1h, 4h, 1D, 1W.\",\n  \"code\": \"INVALID_REQUEST\",\n  \"success\": false,\n  \"requestId\": \"gh826-sample-1\",\n  \"retryable\": false\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Standard error envelope\", function () {",
+                  "  const body = pm.response.json();",
+                  "  if (body.success !== false || body.code !== \"INVALID_REQUEST\" || typeof body.error !== \"string\" || !body.error || typeof body.requestId !== \"string\" || !body.requestId || body.retryable !== false) {",
+                  "    throw new Error(\"Unexpected 400 error envelope: \" + JSON.stringify(body));",
+                  "  }",
+                  "});",
+                  "pm.test(\"X-Request-Id is present\", function () {",
+                  "  const requestId = pm.response.headers.get(\"X-Request-Id\");",
+                  "  if (typeof requestId !== \"string\" || requestId.length === 0) {",
+                  "    throw new Error(\"Missing X-Request-Id response header\");",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Signal Outcomes Leaderboard - reversed date range [400]",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh826-sample-1",
+                "type": "text"
+              }
+            ],
+            "description": "Negative validation example confirming from > to is rejected with HTTP 400 and the standardized error envelope.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/leaderboard?from=2026-08-10T00:00:00Z&to=2026-08-01T00:00:00Z",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "leaderboard"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-08-10T00:00:00Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-08-01T00:00:00Z"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Reversed date range",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"from must be before or equal to to.\",\n  \"code\": \"INVALID_REQUEST\",\n  \"success\": false,\n  \"requestId\": \"gh826-sample-1\",\n  \"retryable\": false\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 400\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Standard error envelope\", function () {",
+                  "  const body = pm.response.json();",
+                  "  if (body.success !== false || body.code !== \"INVALID_REQUEST\" || typeof body.error !== \"string\" || !body.error || typeof body.requestId !== \"string\" || !body.requestId || body.retryable !== false) {",
+                  "    throw new Error(\"Unexpected 400 error envelope: \" + JSON.stringify(body));",
+                  "  }",
+                  "});",
+                  "pm.test(\"X-Request-Id is present\", function () {",
+                  "  const requestId = pm.response.headers.get(\"X-Request-Id\");",
+                  "  if (typeof requestId !== \"string\" || requestId.length === 0) {",
+                  "    throw new Error(\"Missing X-Request-Id response header\");",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Signal Outcomes Leaderboard - missing authentication [401]",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Request-Id",
+                "value": "gh826-sample-1",
+                "type": "text"
+              }
+            ],
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Negative authentication example confirming missing API key and Bearer token returns HTTP 401 with the standardized UNAUTHORIZED envelope.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/leaderboard?groupBy=setupType&window=1D",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "leaderboard"
+              ],
+              "query": [
+                {
+                  "key": "groupBy",
+                  "value": "setupType"
+                },
+                {
+                  "key": "window",
+                  "value": "1D"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\",\n  \"success\": false,\n  \"requestId\": \"gh826-sample-1\",\n  \"retryable\": false\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"HTTP 401\", function () {",
+                  "  pm.response.to.have.status(401);",
+                  "});",
+                  "pm.test(\"Standard error envelope\", function () {",
+                  "  const body = pm.response.json();",
+                  "  if (body.success !== false || body.code !== \"UNAUTHORIZED\" || typeof body.error !== \"string\" || !body.error || typeof body.requestId !== \"string\" || !body.requestId || body.retryable !== false) {",
+                  "    throw new Error(\"Unexpected 401 error envelope: \" + JSON.stringify(body));",
+                  "  }",
+                  "});",
+                  "pm.test(\"X-Request-Id is present\", function () {",
+                  "  const requestId = pm.response.headers.get(\"X-Request-Id\");",
+                  "  if (typeof requestId !== \"string\" || requestId.length === 0) {",
+                  "    throw new Error(\"Missing X-Request-Id response header\");",
+                  "  }",
                   "});"
                 ]
               }

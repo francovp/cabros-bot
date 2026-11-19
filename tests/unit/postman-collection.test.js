@@ -2834,3 +2834,101 @@ describe('enrollment Postman requests', () => {
 		}
 	});
 });
+
+describe('outcomes leaderboard Postman requests', () => {
+	it('executes success, correlation-id, saved negative envelopes, and runnable 400/401 scripts', () => {
+		const vm = require('vm');
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const folder = collection.item.find((item) => item.name === 'Signal Outcomes');
+		expect(folder).toBeDefined();
+
+		const primary = findItem(folder.item, 'GET Signal Outcomes Leaderboard');
+		expect(primary).toBeDefined();
+		for (const expectedCode of [200, 400, 401, 403, 503]) {
+			const saved = (primary.response || []).find((entry) => entry.code === expectedCode);
+			expect(saved).toBeDefined();
+			const parsed = JSON.parse(saved.body);
+			expect(parsed.requestId).toBe('gh826-sample-1');
+			if (expectedCode >= 400) {
+				expect(parsed).toMatchObject({
+					success: false,
+					code: expect.any(String),
+					error: expect.any(String),
+					requestId: 'gh826-sample-1',
+					retryable: expectedCode === 503,
+				});
+			}
+		}
+
+		const primaryScripts = primary.event
+			.filter((event) => event.listen === 'test')
+			.flatMap((event) => event.script.exec)
+			.join('\n');
+		const runPrimary = (body, status) => vm.runInNewContext(primaryScripts, {
+			pm: {
+				test: (_name, work) => work(),
+				expect: (actual) => ({
+					to: {
+						be: {
+							an: (type) => expect(Array.isArray(actual) ? 'array' : typeof actual).toBe(type),
+						},
+					},
+				}),
+				response: {
+					json: () => body,
+					headers: { get: () => 'gh826-sample-1' },
+					to: { have: { status: (expected) => expect(status).toBe(expected) } },
+				},
+			},
+		});
+		runPrimary({ ranked: [], unreliableCohorts: [] }, 200);
+		expect(() => runPrimary({ ranked: [], unreliableCohorts: [] }, 500)).toThrow();
+		expect(() => runPrimary({ ranked: 'not-array', unreliableCohorts: [] }, 200)).toThrow();
+
+		const negativeCases = [
+			{ name: 'GET Signal Outcomes Leaderboard - invalid minTrades [400]', status: 400, code: 'INVALID_REQUEST' },
+			{ name: 'GET Signal Outcomes Leaderboard - invalid window [400]', status: 400, code: 'INVALID_REQUEST' },
+			{ name: 'GET Signal Outcomes Leaderboard - reversed date range [400]', status: 400, code: 'INVALID_REQUEST' },
+			{ name: 'GET Signal Outcomes Leaderboard - missing authentication [401]', status: 401, code: 'UNAUTHORIZED', noauth: true },
+		];
+
+		for (const testCase of negativeCases) {
+			const item = findItem(folder.item, testCase.name);
+			expect(item).toBeDefined();
+			if (testCase.noauth) {
+				expect(item.request.auth).toEqual({ type: 'noauth' });
+				const headerKeys = (item.request.header || []).map((entry) => String(entry.key || '').toLowerCase());
+				expect(headerKeys).not.toContain('x-api-key');
+				expect(headerKeys).not.toContain('authorization');
+			}
+			const saved = (item.response || []).find((entry) => entry.code === testCase.status);
+			expect(saved).toBeDefined();
+			const savedBody = JSON.parse(saved.body);
+			expect(savedBody).toMatchObject({
+				success: false,
+				code: testCase.code,
+				error: expect.any(String),
+				requestId: 'gh826-sample-1',
+				retryable: false,
+			});
+
+			const scripts = item.event
+				.filter((event) => event.listen === 'test')
+				.flatMap((event) => event.script.exec)
+				.join('\n');
+			const runNegative = (body, status) => vm.runInNewContext(scripts, {
+				pm: {
+					test: (_name, work) => work(),
+					response: {
+						json: () => body,
+						headers: { get: () => 'gh826-sample-1' },
+						to: { have: { status: (expected) => expect(status).toBe(expected) } },
+					},
+				},
+			});
+			runNegative(savedBody, testCase.status);
+			expect(() => runNegative(savedBody, 200)).toThrow();
+			expect(() => runNegative({ error: 'partial only', code: testCase.code }, testCase.status)).toThrow();
+		}
+	});
+});
