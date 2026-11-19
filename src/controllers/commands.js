@@ -12,6 +12,10 @@ const alertAcknowledgementService = require('../services/storage/AlertAcknowledg
 const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
 const pretradeCheck = require('./pretradeCheck/pretradeCheck');
+const {
+	normalizeLeaderboardOptions,
+	DEFAULT_LEADERBOARD_WINDOW,
+} = require('../services/storage/outcomesLeaderboard');
 const { resolveSymbolQuery } = require('../services/symbols/aliasResolver');
 const { isChatAuthorized } = require('../lib/telegramCommandAuth');
 const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
@@ -79,6 +83,7 @@ const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
 	alerta: { max: 10, windowMs: 60_000 },
 	history: { max: 10, windowMs: 60_000 },
 	reactions: { max: 10, windowMs: 60_000 },
+	top: { max: 10, windowMs: 60_000 },
 	version: { max: 10, windowMs: 60_000 },
 });
 const TELEGRAM_COMMAND_ALIASES = Object.freeze({
@@ -921,6 +926,214 @@ function parseOutcomeSymbol(rawSymbol) {
 	return { symbol: symbolPart, exchange: undefined };
 }
 
+const TOP_COMMAND_DEFAULT_LIMIT = 5;
+const TOP_COMMAND_MAX_LIMIT = 10;
+
+/**
+ * Parse positional and `key=value` options for `/top` reusing `parseCommandArgs`.
+ * @param {Object|string} contextOrText
+ * @returns {Object}
+ */
+function parseTopCommandArgs(contextOrText) {
+	const context = typeof contextOrText === 'string'
+		? { message: { text: contextOrText } }
+		: (contextOrText || {});
+	const { positionals, options } = parseCommandArgs(context);
+
+	const rawOptions = {
+		groupBy: undefined,
+		window: DEFAULT_LEADERBOARD_WINDOW,
+		minTrades: 10,
+		sort: 'expectancy',
+		order: 'desc',
+		limit: TOP_COMMAND_DEFAULT_LIMIT,
+	};
+
+	const optionAliases = {
+		groupby: 'groupBy',
+		group: 'groupBy',
+		by: 'groupBy',
+		window: 'window',
+		w: 'window',
+		mintrades: 'minTrades',
+		min: 'minTrades',
+		limit: 'limit',
+		n: 'limit',
+		sort: 'sort',
+		order: 'order',
+	};
+
+	for (const [rawKey, val] of Object.entries(options)) {
+		const mapped = optionAliases[rawKey.trim().toLowerCase()];
+		if (!mapped) {
+			throw new Error(`Opción no reconocida: ${rawKey}`);
+		}
+		rawOptions[mapped] = val;
+	}
+
+	for (const token of positionals) {
+		if (/^(1h|4h|1d|1w)$/i.test(token)) {
+			rawOptions.window = token;
+		} else if (!rawOptions.groupBy) {
+			rawOptions.groupBy = token;
+		} else {
+			throw new Error(`Argumento inesperado: ${token}`);
+		}
+	}
+
+	const normalized = normalizeLeaderboardOptions(rawOptions);
+	if (normalized.limit > TOP_COMMAND_MAX_LIMIT) {
+		throw new Error(`limit máximo para /top es ${TOP_COMMAND_MAX_LIMIT}`);
+	}
+	return normalized;
+}
+
+/**
+ * Format leaderboard API payload as MarkdownV2 for Telegram `/top`.
+ * @param {Object} payload
+ * @returns {string}
+ */
+function formatTopLeaderboardMessage(payload) {
+	const groupLabel = Array.isArray(payload?.groupBy) && payload.groupBy.length > 0
+		? payload.groupBy.join(' + ')
+		: 'setupType';
+	const windowLabel = payload?.window || DEFAULT_LEADERBOARD_WINDOW;
+	const minTradesLabel = payload?.minTradesApplied ?? 10;
+	const entries = Array.isArray(payload?.ranked) ? payload.ranked : [];
+
+	const lines = [
+		`*🏆 Top Outcomes \\(${escapeOutcomeText(windowLabel)}\\)*`,
+		`_Grupo: ${escapeOutcomeText(groupLabel)} · minTrades\\=${escapeOutcomeText(minTradesLabel)} · sort\\=${escapeOutcomeText(payload?.sort || 'expectancy')}_`,
+	];
+
+	if (entries.length === 0) {
+		const excluded = Number(payload?.excludedBelowThreshold) || 0;
+		lines.push(
+			`Sin cohortes con al menos ${escapeOutcomeText(minTradesLabel)} trades evaluados en ${escapeOutcomeText(windowLabel)}\\.`,
+		);
+		if (excluded > 0) {
+			lines.push(`⚠️ ${escapeOutcomeText(excluded)} cohortes bajo el mínimo fueron excluidas del ranking\\.`);
+		}
+		if (payload?.coverage?.truncatedByScanLimit) {
+			lines.push('ℹ️ Muestra acotada al límite de 1000 señales del rango\\.');
+		}
+		return lines.join('\n');
+	}
+
+	lines.push('');
+	for (const entry of entries) {
+		const badge = entry.isStatisticallyReliable ? '✅' : '⚠️';
+		const hitText = `${(Number(entry.hitRate || 0) * 100).toFixed(1)}%`;
+		const rText = typeof entry.expectancyR === 'number' && Number.isFinite(entry.expectancyR)
+			? `${entry.expectancyR >= 0 ? '+' : ''}${entry.expectancyR.toFixed(2)}R`
+			: 'n/d';
+		let ciText;
+		if (entry.expectancyRCI95 && typeof entry.expectancyRCI95.lower === 'number' && typeof entry.expectancyRCI95.upper === 'number') {
+			ciText = `[${entry.expectancyRCI95.lower.toFixed(2)}, ${entry.expectancyRCI95.upper.toFixed(2)}]R`;
+		} else if (entry.hitRateCI95) {
+			ciText = `Wilson [${(entry.hitRateCI95.lower * 100).toFixed(0)}%, ${(entry.hitRateCI95.upper * 100).toFixed(0)}%]`;
+		} else {
+			ciText = 'n/d';
+		}
+
+		lines.push(
+			`\`#${entry.rank}\` ${badge} *${escapeOutcomeText(entry.key)}* · \`n=${entry.trades}\` · hit ${escapeOutcomeText(hitText)} · ${escapeOutcomeText(rText)} · CI ${escapeOutcomeText(ciText)}`,
+		);
+	}
+
+	const excludedCount = Number(payload?.excludedBelowThreshold) || 0;
+	if (excludedCount > 0) {
+		lines.push('');
+		lines.push(`⚠️ ${escapeOutcomeText(excludedCount)} cohortes bajo \`minTrades=${escapeOutcomeText(minTradesLabel)}\` excluidas`);
+	}
+	if (payload?.coverage?.truncatedByScanLimit) {
+		lines.push('ℹ️ Muestra acotada al límite de 1000 señales del rango\\.');
+	}
+
+	return lines.join('\n');
+}
+
+/**
+ * Telegram `/top` handler returning ranked setup performance with statistical guards.
+ * @param {Object} context
+ * @returns {Promise<void>}
+ */
+const topCommand = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
+
+	const span = sentryService.startInactiveSpan({
+		name: 'telegram.command.top',
+		op: 'telegram.command',
+	});
+
+	try {
+		const isEnabled = signalOutcomeService.isEnabled()
+			&& (typeof signalOutcomeService.isLeaderboardEnabled !== 'function' || signalOutcomeService.isLeaderboardEnabled());
+		if (!isEnabled) {
+			await context.reply(
+				'El seguimiento de resultados de señales está desactivado — pide a un operador que active ENABLE_SIGNAL_OUTCOME_TRACKING',
+			);
+			return;
+		}
+
+		let parsed;
+		try {
+			parsed = parseTopCommandArgs(context);
+		} catch (validationError) {
+			await context.reply(
+				'Uso: `/top [setupType|symbol|exchange|side|promptSource] [window=1D] [minTrades=10] [limit=5]` \\(máx `limit=10`\\)',
+				{ parse_mode: 'MarkdownV2' },
+			);
+			return;
+		}
+
+		const payload = await withTimeout(
+			(signal) => signalOutcomeService.getOutcomesLeaderboard({
+				groupBy: parsed.groupBy,
+				window: parsed.window,
+				minTrades: parsed.minTrades,
+				sort: parsed.sort,
+				order: parsed.order,
+				limit: parsed.limit,
+				signal,
+			}),
+			OUTCOMES_COMMAND_TIMEOUT_MS,
+			'Top leaderboard query timed out',
+		);
+
+		await context.reply(formatTopLeaderboardMessage(payload), { parse_mode: 'MarkdownV2' });
+	} catch (error) {
+		console.error('Error executing /top command:', error);
+		const isStorageUnavailable = Boolean(error && error.code === signalOutcomeService.STORAGE_UNAVAILABLE_CODE);
+		const isTimeoutOrAbort = Boolean(error && (error.name === 'TimeoutError' || error.name === 'AbortError' || error.code === 'TIMEOUT'));
+		if (!isStorageUnavailable && !isTimeoutOrAbort) {
+			sentryService.captureRuntimeError({
+				channel: 'telegram',
+				error,
+				feature: 'telegram-commands',
+				extra: {
+					command: 'topCommand',
+					chatId: context?.chat?.id,
+				},
+			});
+		}
+		try {
+			if (isStorageUnavailable) {
+				await context.reply('El almacenamiento de resultados no está disponible en este momento. Intenta nuevamente más tarde.');
+			} else {
+				await context.reply('No pude consultar el leaderboard de resultados ahora mismo. Intenta nuevamente más tarde.');
+			}
+		} catch {
+			// Best effort notification on failure
+		}
+	} finally {
+		sentryService.endSpan(span);
+	}
+};
+
 const pretradeCheckCommand = async (context) => {
 	if (isMaintenanceModeEnabled()) {
 		await sendMaintenanceReply(context);
@@ -1309,6 +1522,8 @@ function buildHelpMessage() {
 		'  _Opciones: `crypto=BTCUSDT,ETHUSDT`, `stocks=NVDA`_',
 		'• `/outcomes <simbolo>` — Rendimiento reciente de señales evaluadas \\(alias: `/rendimiento`\\)',
 		'  _Ej: `/outcomes BINANCE:BTCUSDT`_',
+		'• `/top [eje] [window=1D]` — Ranking de setups por expectancy y hit rate',
+		'  _Ej: `/top setupType window=1D minTrades=10 limit=5`_',
 		'• `/check <simbolo>` — Pre\\-trade check \\(precio \\+ hit\\-rate\\) \\(alias: `/pretrade`, `/setup`\\)',
 		'  _Ej: `/check BINANCE:BTCUSDT` o `/check NVDA`_',
 		'• `/preferencias` — Preferencias de alertas para este chat \\(símbolos, silencio, umbral, categorías\\)',
@@ -1757,6 +1972,9 @@ module.exports = {
 	demoCmd,
 	startCmd,
 	outcomesCommand,
+	topCommand,
+	parseTopCommandArgs,
+	formatTopLeaderboardMessage,
 	pretradeCheckCommand,
 	resolveCmd,
 	reactionsCommand,

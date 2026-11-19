@@ -198,6 +198,24 @@ GET /api/outcomes/summary?setupType=breakout&breakdown=symbol,setup
 
 `GET /api/alerts/summary` accepts the same `breakdown` values to add these arrays inside its `shadowModeMetrics` object when that object is available.
 
+#### GET /api/outcomes/leaderboard
+
+Rank signal outcome cohorts (`setupType`, `symbol`, `exchange`, `side`, `promptSource`, single or up to 3 composite axes) over the bounded `tradingSignalOutcomes` window (`max 31 days`, `max 1000 scanned documents`, 60-second filter-keyed in-process memoization cache invalidated on outcome writes).
+
+- **Query parameters**:
+  - `groupBy`: `setupType | symbol | exchange | side | promptSource` (comma-separated or repeated up to 3 axes; default `setupType`). Legacy records without `promptProvenance` group under `promptSource: null` rather than being dropped.
+  - `window`: `1h | 4h | 1D | 1W` (case-insensitive, default `1D`).
+  - `minTrades`: integer `1..1000` (default `10`). Cohorts below `minTrades` are surfaced in `unreliableCohorts` and counted in `excludedBelowThreshold`.
+  - `sort`: `expectancy | hitRate | sampleSize | consistency` (default `expectancy`).
+  - `order`: `asc | desc` (default `desc`).
+  - `limit`: integer `1..100` (default `20`).
+  - `from`, `to`: optional ISO-8601 timestamps (`from <= to`, range `<= 31 days`; defaults to trailing 30 days).
+- **Statistical intervals**:
+  - `hitRateCI95`: two-sided Wilson score 95% interval (`z = 1.96`).
+  - `expectancyRCI95`: normal-approximation 95% confidence interval (`expectancyR ± 1.96 * sampleStdDevR / sqrt(n)`); `null` when fewer than 2 trades have finite `rMultiple`.
+  - `isStatisticallyReliable`: `true` iff `trades >= 30` and `expectancyRCI95` excludes zero (`lower > 0` or `upper < 0`), surfacing both reliably net-positive and reliably net-negative cohorts.
+- **Feature gate**: requires `ENABLE_SIGNAL_OUTCOME_TRACKING=true` and Remote Config `ENABLE_OUTCOMES_LEADERBOARD !== false` (reflected in `GET /api/status` under `featureFlags.outcomesLeaderboard`). Returns `403 FEATURE_DISABLED` when disabled, `400 INVALID_REQUEST` on bad params, and `503 STORAGE_UNAVAILABLE` when Firestore cannot be read.
+
 #### GET /api/outcomes/trend
 
 Query precomputed daily outcome snapshot metrics (hit rate, wins, losses, MFE, MAE) over time for a given evaluation window (`1h`, `4h`, `1D`, `1W`) and date range (up to 180 days, default 30 days).

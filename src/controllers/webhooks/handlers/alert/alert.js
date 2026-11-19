@@ -1302,6 +1302,9 @@ function postAlert(botOrGetter) {
 						sources: alert.enriched && Array.isArray(alert.enriched.sources) ? alert.enriched.sources : [],
 						tokenUsage: tokenUsageJSON,
 						processingTimeMs: Date.now() - startTime,
+						...(alert.enriched?.promptProvenance
+							? { promptProvenance: alert.enriched.promptProvenance }
+							: (alert.enriched?.prompt_provenance ? { promptProvenance: alert.enriched.prompt_provenance } : {})),
 					}).catch(() => {});
 				}
 			}

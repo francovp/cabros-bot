@@ -2,8 +2,10 @@
 
 jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	isEnabled: jest.fn(),
+	isLeaderboardEnabled: jest.fn(() => true),
 	listOutcomes: jest.fn(),
 	summarizeOutcomes: jest.fn(),
+	getOutcomesLeaderboard: jest.fn(),
 	getOutcomesTrend: jest.fn(),
 	getOutcomeById: jest.fn(),
 	exportOutcomes: jest.fn(),
@@ -1042,6 +1044,121 @@ describe('Signal Outcomes API Integration Tests', () => {
 				.set('x-api-key', 'test-key')
 				.expect(503);
 
+			expect(res.body.code).toBe('STORAGE_UNAVAILABLE');
+		});
+	});
+
+	describe('GET /api/outcomes/leaderboard', () => {
+		it('returns 401 when unauthenticated', async () => {
+			const res = await request(app)
+				.get('/api/outcomes/leaderboard')
+				.expect(401);
+			expect(res.body.error).toContain('Unauthorized');
+		});
+
+		it('returns 403 when feature is disabled or Remote Config disables leaderboard', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(false);
+			const res1 = await request(app)
+				.get('/api/outcomes/leaderboard')
+				.set('x-api-key', 'test-key')
+				.expect(403);
+			expect(res1.body.code).toBe('FEATURE_DISABLED');
+
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.isLeaderboardEnabled.mockReturnValueOnce(false);
+			const res2 = await request(app)
+				.get('/api/outcomes/leaderboard')
+				.set('x-api-key', 'test-key')
+				.expect(403);
+			expect(res2.body.code).toBe('FEATURE_DISABLED');
+			expect(signalOutcomeService.getOutcomeById).not.toHaveBeenCalled();
+		});
+
+		it('returns 400 on invalid query bounds', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.isLeaderboardEnabled.mockReturnValue(true);
+
+			const res = await request(app)
+				.get('/api/outcomes/leaderboard?sort=bad&minTrades=1001')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 200 with ranked leaderboard and echoes X-Request-Id', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.isLeaderboardEnabled.mockReturnValue(true);
+			signalOutcomeService.getOutcomesLeaderboard.mockResolvedValue({
+				success: true,
+				groupBy: ['setupType'],
+				window: '1D',
+				from: '2026-08-21T00:00:00.000Z',
+				to: '2026-08-28T00:00:00.000Z',
+				minTradesApplied: 10,
+				sort: 'expectancy',
+				order: 'desc',
+				limit: 20,
+				ranked: [
+					{
+						rank: 1,
+						key: 'pullback',
+						components: { setupType: 'pullback' },
+						trades: 42,
+						wins: 28,
+						losses: 12,
+						breakeven: 2,
+						hitRate: 0.6667,
+						hitRateCI95: { lower: 0.5155, upper: 0.7899 },
+						expectancyR: 0.42,
+						expectancyRCI95: { lower: 0.12, upper: 0.72 },
+						averageMAEPercent: -1.8,
+						averageMFEPercent: 3.1,
+						averageReturnPercent: 1.6,
+						firstHitBreakdown: { target: 28, stop: 12, neither: 2 },
+						isStatisticallyReliable: true,
+						reliabilityNote: 'n=42 >= 30; normal 95% CI excludes zero (net-positive).',
+					},
+				],
+				excludedBelowThreshold: 1,
+				unreliableCohorts: [
+					{ key: 'scalp', components: { setupType: 'scalp' }, trades: 4, reason: 'below minTrades=10' },
+				],
+				coverage: {
+					scannedDocs: 47,
+					docsWithEvaluatedWindow: 46,
+					docsWithoutEvaluatedWindow: 1,
+					totalCohorts: 2,
+					unreliableCohortsCount: 1,
+					maxScanDocs: 1000,
+					truncatedByScanLimit: false,
+				},
+				warnings: [],
+				requestId: 'lb-int-req-1',
+			});
+
+			const res = await request(app)
+				.get('/api/outcomes/leaderboard?groupBy=setupType&window=1D&minTrades=10')
+				.set('x-api-key', 'test-key')
+				.set('X-Request-Id', 'lb-int-req-1')
+				.expect(200);
+
+			expect(res.headers['x-request-id']).toBe('lb-int-req-1');
+			expect(res.body.success).toBe(true);
+			expect(res.body.ranked).toHaveLength(1);
+			expect(res.body.unreliableCohorts).toHaveLength(1);
+		});
+
+		it('returns 503 when Firestore is unavailable', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.isLeaderboardEnabled.mockReturnValue(true);
+			const error = new Error('Firestore is unavailable');
+			error.code = 'STORAGE_UNAVAILABLE';
+			signalOutcomeService.getOutcomesLeaderboard.mockRejectedValue(error);
+
+			const res = await request(app)
+				.get('/api/outcomes/leaderboard')
+				.set('x-api-key', 'test-key')
+				.expect(503);
 			expect(res.body.code).toBe('STORAGE_UNAVAILABLE');
 		});
 	});

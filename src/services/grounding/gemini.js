@@ -547,6 +547,11 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 		} else if (prompt && prompt.version != null) {
 			analysisResult.promptVersion = String(prompt.version);
 		}
+		const promptProvenance = getPromptProvenance(prompt);
+		if (promptProvenance) {
+			analysisResult.promptProvenance = promptProvenance;
+			analysisResult.prompt_provenance = promptProvenance;
+		}
 
 		console.info('[Gemini] News analysis complete with grounding', {
 			symbol,

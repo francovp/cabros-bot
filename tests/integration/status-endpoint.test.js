@@ -1506,7 +1506,32 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.signalOutcomeTracking).toBe(true);
+		expect(response.body.featureFlags.outcomesLeaderboard).toBe(true);
 		expect(response.body.dependencies.signalOutcomeWorker.enabled).toBe(true);
+	});
+
+	it('derives featureFlags.outcomesLeaderboard from signalOutcomeTracking and allows Remote Config runtime toggle', async () => {
+		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'false';
+		const disabledRes = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		expect(disabledRes.status).toBe(200);
+		expect(disabledRes.body.featureFlags.outcomesLeaderboard).toBe(false);
+
+		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+		remoteConfigService._setRemoteOverridesForTesting({ ENABLE_OUTCOMES_LEADERBOARD: false });
+		try {
+			const overriddenRes = await request(app)
+				.get('/api/capabilities')
+				.set('x-api-key', 'status-key');
+			expect(overriddenRes.status).toBe(200);
+			expect(overriddenRes.body.featureFlags.signalOutcomeTracking).toBe(true);
+			expect(overriddenRes.body.featureFlags.outcomesLeaderboard).toBe(false);
+		} finally {
+			remoteConfigService._resetForTesting();
+		}
 	});
 
 	it('separates Langfuse configuration readiness from actual prompt serving', async () => {

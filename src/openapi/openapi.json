@@ -4526,6 +4526,157 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/outcomes/leaderboard": {
+      "get": {
+        "tags": [
+          "Signal outcomes"
+        ],
+        "summary": "Rank signal cohorts with statistical confidence guards",
+        "description": "Returns a ranked leaderboard of evaluated signal cohorts over a bounded window (max 31 days / 1000 scanned documents), separating below-threshold samples into `unreliableCohorts`. Uses two-sided Wilson 95% intervals for `hitRateCI95` and normal-approximation 95% intervals (`mean ± 1.96 * s / sqrt(n)`) for `expectancyRCI95`. Gated by `ENABLE_SIGNAL_OUTCOME_TRACKING=true` and Remote Config runtime kill-switch `ENABLE_OUTCOMES_LEADERBOARD` (default `true`).",
+        "operationId": "getOutcomesLeaderboard",
+        "parameters": [
+          {
+            "name": "groupBy",
+            "in": "query",
+            "required": false,
+            "description": "One to three grouping axes (comma-separated or repeated): setupType, symbol, exchange, side, promptSource. Defaults to setupType.",
+            "style": "form",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "setupType",
+                  "symbol",
+                  "exchange",
+                  "side",
+                  "promptSource"
+                ]
+              },
+              "maxItems": 3
+            }
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "description": "Evaluation horizon window (case-insensitive 1h, 4h, 1D, 1W). Defaults to 1D.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1h",
+                "4h",
+                "1D",
+                "1W"
+              ],
+              "default": "1D"
+            }
+          },
+          {
+            "name": "minTrades",
+            "in": "query",
+            "required": false,
+            "description": "Minimum evaluated trades required to enter the ranked list (1-1000, default 10). Smaller cohorts are returned under `unreliableCohorts`.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 10
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "description": "Ranking metric (default expectancy).",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "expectancy",
+                "hitRate",
+                "sampleSize",
+                "consistency"
+              ],
+              "default": "expectancy"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "description": "Sort direction (default desc).",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "default": "desc"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum ranked cohorts to return (1-100, default 20).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OutcomesLeaderboardResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/outcomes/trend": {
       "get": {
         "tags": [
@@ -12015,6 +12166,21 @@
           }
         }
       },
+      "OutcomesLeaderboardResult": {
+        "description": "Ranked, statistically-guarded signal outcomes cohort leaderboard",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OutcomesLeaderboardResponse"
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
+      },
       "OutcomesTrendResult": {
         "description": "Signal outcomes daily trend series",
         "content": {
@@ -12336,7 +12502,8 @@
                 "symbolAnalysisMultiAgent": false,
                 "apiOnlyMode": false,
                 "telegramCommandRateLimiting": true,
-                "marketCalendarGating": false
+                "marketCalendarGating": false,
+                "outcomesLeaderboard": true
               },
               "dependencies": {
                 "watchlist": {
@@ -16297,6 +16464,318 @@
           },
           "delta": {
             "$ref": "#/components/schemas/OutcomesSummaryDelta"
+          }
+        }
+      },
+      "OutcomesLeaderboardConfidenceInterval": {
+        "type": "object",
+        "required": [
+          "lower",
+          "upper"
+        ],
+        "properties": {
+          "lower": {
+            "type": "number"
+          },
+          "upper": {
+            "type": "number"
+          }
+        }
+      },
+      "OutcomesLeaderboardUnreliableCohort": {
+        "type": "object",
+        "required": [
+          "key",
+          "components",
+          "trades",
+          "reason"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "example": "reversal:SELL:NASDAQ"
+          },
+          "components": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "trades": {
+            "type": "integer",
+            "minimum": 1,
+            "example": 4
+          },
+          "reason": {
+            "type": "string",
+            "example": "below minTrades=10"
+          }
+        }
+      },
+      "OutcomesLeaderboardEntry": {
+        "type": "object",
+        "required": [
+          "rank",
+          "key",
+          "components",
+          "trades",
+          "wins",
+          "losses",
+          "breakeven",
+          "hitRate",
+          "hitRateCI95",
+          "expectancyR",
+          "expectancyRCI95",
+          "averageMAEPercent",
+          "averageMFEPercent",
+          "averageReturnPercent",
+          "firstHitBreakdown",
+          "isStatisticallyReliable",
+          "reliabilityNote"
+        ],
+        "properties": {
+          "rank": {
+            "type": "integer",
+            "minimum": 1,
+            "example": 1
+          },
+          "key": {
+            "type": "string",
+            "example": "pullback:BUY:BINANCE"
+          },
+          "components": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "trades": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "wins": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "losses": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "breakeven": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "hitRate": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "hitRateCI95": {
+            "$ref": "#/components/schemas/OutcomesLeaderboardConfidenceInterval",
+            "description": "Two-sided Wilson 95% confidence interval on hitRate."
+          },
+          "expectancyR": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "expectancyRCI95": {
+            "description": "Normal-approximation 95% confidence interval (`expectancyR ± 1.96 * s / sqrt(n)`). Null when fewer than 2 trades have finite R-multiples.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OutcomesLeaderboardConfidenceInterval"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "averageMAEPercent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "averageMFEPercent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "averageReturnPercent": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "firstHitBreakdown": {
+            "type": "object",
+            "required": [
+              "target",
+              "stop",
+              "neither"
+            ],
+            "properties": {
+              "target": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "stop": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "neither": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "isStatisticallyReliable": {
+            "type": "boolean"
+          },
+          "reliabilityNote": {
+            "type": "string"
+          }
+        }
+      },
+      "OutcomesLeaderboardResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "groupBy",
+          "window",
+          "from",
+          "to",
+          "minTradesApplied",
+          "sort",
+          "order",
+          "limit",
+          "ranked",
+          "excludedBelowThreshold",
+          "unreliableCohorts",
+          "coverage",
+          "warnings",
+          "requestId"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "groupBy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "window": {
+            "type": "string",
+            "enum": [
+              "1h",
+              "4h",
+              "1D",
+              "1W"
+            ]
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "minTradesApplied": {
+            "type": "integer"
+          },
+          "sort": {
+            "type": "string",
+            "enum": [
+              "expectancy",
+              "hitRate",
+              "sampleSize",
+              "consistency"
+            ]
+          },
+          "order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "ranked": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutcomesLeaderboardEntry"
+            }
+          },
+          "excludedBelowThreshold": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "unreliableCohorts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutcomesLeaderboardUnreliableCohort"
+            }
+          },
+          "coverage": {
+            "type": "object",
+            "required": [
+              "scannedDocs",
+              "docsWithEvaluatedWindow",
+              "docsWithoutEvaluatedWindow",
+              "totalCohorts",
+              "unreliableCohortsCount",
+              "maxScanDocs",
+              "truncatedByScanLimit"
+            ],
+            "properties": {
+              "scannedDocs": {
+                "type": "integer"
+              },
+              "docsWithEvaluatedWindow": {
+                "type": "integer"
+              },
+              "docsWithoutEvaluatedWindow": {
+                "type": "integer"
+              },
+              "totalCohorts": {
+                "type": "integer"
+              },
+              "unreliableCohortsCount": {
+                "type": "integer"
+              },
+              "maxScanDocs": {
+                "type": "integer"
+              },
+              "truncatedByScanLimit": {
+                "type": "boolean"
+              }
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "requestId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -27136,6 +27615,10 @@
               "globalAlertBudget": {
                 "type": "boolean",
                 "description": "Whether the rolling 24-hour alert-delivery budget is active (GLOBAL_ALERT_BUDGET_PER_24H > 0)."
+              },
+              "outcomesLeaderboard": {
+                "type": "boolean",
+                "description": "Whether GET /api/outcomes/leaderboard and Telegram /top are active (defaults to true when ENABLE_SIGNAL_OUTCOME_TRACKING=true; Remote Config override ENABLE_OUTCOMES_LEADERBOARD)."
               }
             }
           }

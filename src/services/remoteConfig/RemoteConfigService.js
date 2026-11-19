@@ -175,6 +175,9 @@ const PARAMETER_SCHEMA = Object.freeze({
 	REMOTE_CONFIG_REFRESH_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
 	ENABLE_ALERT_DECISION_AUDIT: { type: 'boolean', defaultValue: false },
 	ENABLE_OUTCOME_INFORMED_DELIVERY: { type: 'boolean', defaultValue: false },
+	// Non-secret runtime kill-switch for the outcomes leaderboard (/api/outcomes/leaderboard + /top).
+	// Still requires ENABLE_SIGNAL_OUTCOME_TRACKING=true on the deployment.
+	ENABLE_OUTCOMES_LEADERBOARD: { type: 'boolean', defaultValue: true },
 	OUTCOME_ANNOTATION_LOOKBACK_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
 	OUTCOME_ANNOTATION_MIN_SAMPLE: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 100 },
 	OUTCOME_ANNOTATION_TIMEOUT_MS: { type: 'number', defaultValue: 2000, integer: true, min: 50, max: 10000 },

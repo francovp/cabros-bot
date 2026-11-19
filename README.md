@@ -202,6 +202,7 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `POST` | `/api/alerts/:alertId/replay` | Dry-run or live replay of stored alert | [Stored Alerts](docs/alerts.md#post-apialertsalertidreplay) |
 | `GET` | `/api/outcomes` | Query signal outcomes with multi-window returns | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomes) |
 | `GET` | `/api/outcomes/summary` | Expectancy, win rate, filters, and optional bounded symbol/setup breakdowns | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomessummary) |
+| `GET` | `/api/outcomes/leaderboard` | Ranked, statistically-guarded cohort leaderboard (Wilson 95% hit-rate CI & normal R CI) | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomesleaderboard) |
 | `GET` | `/api/outcomes/trend` | Query daily outcome snapshot metrics (hit rate, wins, losses, MFE, MAE) over time | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomestrend) |
 | `GET` | `/api/outcomes/{outcomeId}` | Retrieve one sanitized signal outcome | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomesoutcomeid) |
 | `GET` | `/api/outcomes/export` | Export bounded signal outcomes as JSONL or CSV | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomesexport) |
@@ -268,6 +269,7 @@ When the Telegram bot is enabled (`ENABLE_TELEGRAM_BOT=true`), the bot provides 
 | `/scanner` | `[options]` | Executes market scanner sweep across preconfigured assets. |
 | `/jobs` | `[jobId]` | Inspects status or lists active background analysis jobs. |
 | `/noticias` | `[options]` | Trigger news monitoring analysis for specified crypto/equity tickers. |
+| `/top` | `[groupBy] [window=1D] [minTrades=10] [limit=5]` | Ranked signal outcome cohorts with 95% confidence intervals (gated by `ENABLE_SIGNAL_OUTCOME_TRACKING`). |
 | `/reactions`, `/reacciones` | `<symbol>` | Returns top 3 setups by trader reaction approval over the last 7 days. |
 | `/version` | None | Confirms running build SHA, platform environment, and uptime. Sourced from the same `build` object as `GET /api/capabilities`. |
 | `/digest` | `[--dry-run]` | Daily trader digest of the previous UTC day (alerts by source/channel, matured 1D outcome hit-rate, top scanner hits, top winners, LLM spend). `--dry-run` returns the formatted digest without sending or persisting. Rate-limited to once per 5 minutes per chat; sends require `ENABLE_DAILY_DIGEST=true` plus durable `ENABLE_FIRESTORE_DIGEST_RUNS=true` and `TELEGRAM_DIGEST_CHAT_ID`. |
@@ -540,7 +542,7 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
 
 | Variable | Default | Bounds | Purpose |
 | :--- | :--- | :--- | :--- |
-| `ENABLE_SIGNAL_OUTCOME_TRACKING` | `false` | — | Master gate for recording, sweeping and `/api/outcomes`. Environment-only. |
+| `ENABLE_SIGNAL_OUTCOME_TRACKING` | `false` | — | Master gate for recording, sweeping, `/api/outcomes*` (including `/leaderboard`), Telegram `/top`, and `featureFlags.outcomesLeaderboard`. Environment-only. |
 | `ENABLE_TELEGRAM_REACTION_AGGREGATION` | `false` | — | Aggregate Telegram message reactions into signal quality scores. |
 | `SIGNAL_OUTCOME_WORKER_ROLE` | `web` | `web`/`worker`/`disabled` | Which entrypoint may start the sweep. Environment-only. |
 | `SIGNAL_OUTCOME_EVALUATION_LEASE_MS` | `120000` | `10000`–`600000` | Distributed sweep lease duration. Environment-only. |
@@ -552,6 +554,7 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
 | Remote Config parameter | Environment/default fallback | Bounds | Purpose |
 | --- | --- | --- | --- |
 | `SIGNAL_OUTCOME_ROLLUP_ENABLED` | `true` | boolean | Opt-in runtime gate for computing daily signal outcome rollups during scheduled evaluation sweeps. |
+| `ENABLE_OUTCOMES_LEADERBOARD` | `true` | boolean | Runtime kill-switch for `GET /api/outcomes/leaderboard`, Telegram `/top`, and `featureFlags.outcomesLeaderboard` (still requires `ENABLE_SIGNAL_OUTCOME_TRACKING=true`). |
 | `SIGNAL_OUTCOME_ROLLUP_TTL_DAYS` | `180` | integer `30`–`365` | Retention policy in days for `tradingSignalOutcomesDaily` documents before Firestore native TTL deletion. |
 
 Both settings are non-secret runtime tuning parameters supported by Firebase Remote Config. Fresh published values override environment/default values.

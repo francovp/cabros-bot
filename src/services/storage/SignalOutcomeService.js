@@ -653,8 +653,49 @@ function isRegionBlockedError(err) {
 	return REGION_BLOCK_MESSAGE_PATTERNS.some((pattern) => lower.includes(pattern));
 }
 
+const {
+	queryOutcomesLeaderboard,
+	clearLeaderboardCache,
+	DEFAULT_LEADERBOARD_WINDOW,
+} = require('./outcomesLeaderboard');
+
+function normalizeOutcomePromptProvenance(provenance) {
+	if (!provenance || typeof provenance !== 'object') {
+		return null;
+	}
+	const source = typeof provenance.source === 'string' && provenance.source.trim()
+		? provenance.source.trim()
+		: null;
+	const name = typeof provenance.name === 'string' && provenance.name.trim()
+		? provenance.name.trim()
+		: null;
+	if (!source) {
+		return null;
+	}
+	return {
+		...(name ? { name } : {}),
+		source,
+		...(typeof provenance.label === 'string' && provenance.label.trim() ? { label: provenance.label.trim() } : {}),
+		...(Number.isInteger(provenance.version) ? { version: provenance.version } : {}),
+		...(typeof provenance.schemaDriftDetected === 'boolean' ? { schemaDriftDetected: provenance.schemaDriftDetected } : {}),
+	};
+}
+
 function isEnabled() {
 	return process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true';
+}
+
+/**
+ * Check whether the outcomes leaderboard feature is enabled via master tracking gate
+ * and non-secret Remote Config override (`ENABLE_OUTCOMES_LEADERBOARD`).
+ * @returns {boolean}
+ */
+function isLeaderboardEnabled() {
+	if (!isEnabled()) {
+		return false;
+	}
+	const runtimeConfig = getRuntimeConfig();
+	return runtimeConfig?.ENABLE_OUTCOMES_LEADERBOARD !== false;
 }
 
 function getWorkerRole() {
@@ -1037,6 +1078,7 @@ async function recordSignalInternal({
 	assetClass,
 	session,
 	traderIntent,
+	promptProvenance,
 } = {}) {
 	if (!isEnabled()) {
 		return null;
@@ -1341,6 +1383,10 @@ async function recordSignalInternal({
 			tokenUsage: tokenUsage || null,
 			processingTimeMs: typeof processingTimeMs === 'number' && Number.isFinite(processingTimeMs) ? processingTimeMs : null,
 			...(cleanTraderIntent ? { traderIntent: cleanTraderIntent } : {}),
+			...(() => {
+				const cleanProvenance = normalizeOutcomePromptProvenance(promptProvenance);
+				return cleanProvenance ? { promptProvenance: cleanProvenance } : {};
+			})(),
 			marketDataProvider: normSymbolInfo.exchange === 'BINANCE' ? 'binance' : (equityProviderName || null),
 			outcomeWindows,
 			outcomeWindowLabels,
@@ -1379,7 +1425,14 @@ async function recordSignalInternal({
 }
 
 function recordSignal(params) {
-	return trackBackgroundTask(recordSignalInternal(params));
+	return trackBackgroundTask(
+		recordSignalInternal(params).then((id) => {
+			if (id) {
+				clearLeaderboardCache();
+			}
+			return id;
+		}),
+	);
 }
 
 /**
@@ -2061,6 +2114,9 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 		console.warn('[SignalOutcomeService] Failed to evaluate pending outcomes:', error.message);
 		return { scannedCount, evaluatedCount, error: error.message };
 	} finally {
+		if (evaluatedCount > 0) {
+			clearLeaderboardCache();
+		}
 		if (leaseRenewHandle) {
 			await leaseRenewHandle.stop();
 			leaseRenewHandle = null;
@@ -3969,6 +4025,11 @@ function formatOutcomeDocument(doc) {
 		tokenUsage: summarizeTokenUsage(data.tokenUsage),
 		processingTimeMs: typeof data.processingTimeMs === 'number' && Number.isFinite(data.processingTimeMs) ? data.processingTimeMs : null,
 		...(data.traderIntent && typeof data.traderIntent === 'object' ? { traderIntent: data.traderIntent } : {}),
+		...((data.promptProvenance && typeof data.promptProvenance === 'object')
+			? { promptProvenance: data.promptProvenance }
+			: (data.prompt_provenance && typeof data.prompt_provenance === 'object'
+				? { promptProvenance: data.prompt_provenance }
+				: {})),
 	};
 
 	if (Object.prototype.hasOwnProperty.call(data, 'sessionContext')) {
@@ -4753,6 +4814,7 @@ function _resetForTesting() {
 	lastRunRegionBlockedCount = 0;
 	lastRunLeaseHeld = false;
 	leaseHeldSkipCount = 0;
+	clearLeaderboardCache();
 }
 
 async function rollupOutcomesDaily(options = {}) {
@@ -4765,8 +4827,31 @@ async function getOutcomesTrend(options = {}) {
 	return dailyRollupService.getOutcomesTrend({ firestore, ...options });
 }
 
+/**
+ * Return a ranked, statistically-guarded cohort leaderboard over bounded `tradingSignalOutcomes` reads.
+ * @param {Object} [options]
+ * @returns {Promise<Object>}
+ */
+async function getOutcomesLeaderboard(options = {}) {
+	return queryOutcomesLeaderboard(options, {
+		fetchDocs: async (parsedFrom, parsedTo, abortSignal) => {
+			const firestore = AlertStorageService.getFirestore();
+			if (!firestore) {
+				throw createStorageUnavailableError();
+			}
+			return fetchOutcomeDocs(firestore, parsedFrom, parsedTo, {
+				abortSignal: abortSignal || options.signal || null,
+			});
+		},
+	});
+}
+
 module.exports = {
 	isEnabled,
+	isLeaderboardEnabled,
+	getOutcomesLeaderboard,
+	clearLeaderboardCache,
+	DEFAULT_LEADERBOARD_WINDOW,
 	recordSignal,
 	getSessionContext,
 	evaluatePendingOutcomes,
