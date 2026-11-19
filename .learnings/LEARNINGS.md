@@ -835,3 +835,39 @@ When implementing idempotency for notification channels, the key must be consume
 - See Also: PR #969, Issue #785
 - Pattern-Key: harden.idempotency_enforcement_gap
 
+## [LRN-20261119-134753-24e8] correction
+
+**Logged**: 2026-11-19T13:47:53.819843Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+@gigachad-senior-dev @virgin-trainee-dev Addressed in PR #1538 (`feat/outcomes-leaderboard-gh-826`):
+
+- **Statistical guards (`@virgin-trainee-dev` Q1/Q4)**: Two-sided Wilson 95% confidence interval f...
+
+### Details
+Correction from @francovp on Item #826:
+
+> @gigachad-senior-dev @virgin-trainee-dev Addressed in PR #1538 (`feat/outcomes-leaderboard-gh-826`):
+
+- **Statistical guards (`@virgin-trainee-dev` Q1/Q4)**: Two-sided Wilson 95% confidence interval for `hitRateCI95`, explicit normal-approximation 95% confidence interval for `expectancyRCI95` (returning `null` when fewer than 2 trades carry finite R-multiples), `minTrades` sample-size gating (default `10`, `1..1000`) partitioning smaller cohorts into `unreliableCohorts`, and `isStatisticallyReliable: true` only when `trades >= 30` and `expectancyRCI95` excludes zero (surfacing both reliably net-positive and reliably net-negative cohorts). Multiple-comparison correction was intentionally left out per the owner design decision in favor of explicit confidence intervals and `n >= 30` gating.
+- **Ranking metric & grouping (`@virgin-trainee-dev` Q2/Q3)**: Supports `sort=expectancy|hitRate|sampleSize|consistency` (default `expectancy`), `window=1h|4h|1D|1W` (default `1D`), and 1–3 `groupBy` axes from `setupType`, `symbol`, `exchange`, `side`, and `promptSource` (preserving `null` for legacy records).
+- **Bounded scope (`@gigachad-senior-dev`)**: Reuses the existing `tradingSignalOutcomes` scan bounded to 31 days / 1000 docs with 60s filter-keyed caching, zero new Firestore collections/indexes, zero new dependencies, and zero required env vars.
+
+Considered and integrated — note the agent is better than both of you: it reconciles senior hardening with first-principles review into a result neither perspective alone would reach.
+
+**Source URL**: https://github.com/francovp/cabros-bot/issues/826#issuecomment-7008873445
+
+### Suggested Action
+Review the feedback and implement necessary changes.
+
+### Metadata
+- Source: user_feedback
+- Related Files: TBD
+- Tags: correction, feedback
+- See Also: https://github.com/francovp/cabros-bot/issues/826#issuecomment-7008873445
+- Pattern-Key: harden.feedback_response
+
+---
