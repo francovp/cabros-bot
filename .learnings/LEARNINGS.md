@@ -871,3 +871,78 @@ Review the feedback and implement necessary changes.
 - Pattern-Key: harden.feedback_response
 
 ---
+
+## [LRN-20261121-014500-001] correction
+
+**Logged**: 2026-11-21T01:45:00Z
+**Priority**: high
+**Status**: pending
+**Area**: security
+
+### Summary
+PR #1088 (WEBHOOK_API_KEY rotation) — CodeQL flags sensitive data in GET request via query parameter; pre-existing compatibility surface on deprecation path; human review required for scanner dismissal.
+
+### Details
+On PR #1088 (feat(auth): opt-in WEBHOOK_API_KEY rotation with overlap window), @francovp issued a holding review:
+
+> The single open thread is from `github-advanced-security`, not a human reviewer. I want to be explicit up front: I am not going to resolve that thread. Security-scanner alerts are a human call, and this one deserves a human with the rotation context in front of them.
+
+CodeQL alert: "Sensitive data read from GET request — Route handler for GET requests uses query parameter as sensitive data."
+
+@francovp verified the alert's characterization is correct — `GET /news-monitor` runs through `validateApiKey`, which reads the `api-key` query parameter from `src/lib/auth.js`. This is a pre-existing, intentional compatibility affordance documented in AGENTS.md as supported but not recommended (leaks through reverse-proxy access logs), with a sunset mechanism (`API_KEY_QUERY_SUNSET`) and tests covering deprecation.
+
+The PR does not widen the surface — query reads actually decrease from 4 to 2 via consolidation in `getApiKeyFromRequest` and `findMatchingKeySlot`.
+
+### Why this matters
+@francovp explicitly declined to merge because he cannot clear a CodeQL thread, and rotation changes "how many secrets can authenticate this endpoint" — this deserves explicit human approval on the scanner rather than inference.
+
+### Suggested Action
+When security scanners flag pre-existing but intentional patterns, document the risk acceptance explicitly with owner sign-off. Do not dismiss scanner alerts on inference alone when the change modifies authentication surface area. Ensure deprecation paths (sunset mechanisms) are tested and documented.
+
+### Metadata
+- Source: github_review
+- Related Files: src/lib/auth.js, src/routes/index.js, tests/security/api-key-query-deprecation.test.js, AGENTS.md
+- Tags: security, codeql, api-key, rotation, deprecation, human-review
+- See Also: PR #1088
+- Pattern-Key: harden.security_scanner_human_review
+
+---
+
+## [LRN-20261121-014500-002] correction
+
+**Logged**: 2026-11-21T01:45:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+PR #950 (batch symbol lookups in /precio) — 6 open findings including P1: new batch reply lacks MarkdownV2 parse_mode, creating latent parse-error risk when enabled; 5 P2s on pacing budget, per-lookup bounding, timeframe suffixes, single-symbol path, and documentation.
+
+### Details
+On PR #950 (feat(precio): batch symbol lookups in /precio command), @francovp issued a holding review with 6 findings:
+
+**P1 — MarkdownV2 consistency**: The new batched reply path sends messages without `{ parse_mode: 'MarkdownV2' }`, while every other reply in the file (and `TelegramService` centrally) uses it. Current messages are unescaped on both sides, so Telegram treats them as plain text and no parse error occurs today. However, the moment `parse_mode` is added (the obvious fix), unescaped `.`, `-`, `(`, `)`, and `•` bullets will cause parse failures — the same trap as GH-711.
+
+**P2 — Pacing budget**: With production defaults of 8 RPM and 5-second window, a queued batch of equity lookups exceeds the provider budget, causing self-throttling or drops.
+
+**P2 — Per-lookup bounding**: If any single Binance lookup stalls at the 5s client timeout, `fetchSymbolsPrices` waits for the slowest rather than failing that row independently.
+
+**P2 — Timeframe suffix regression**: Previously supported `BTCUSDT (1h)` form may not survive `parseSymbolList`, a silent regression for existing users.
+
+**P2 — Single-symbol path**: One-symbol requests should use the parsed token rather than re-deriving from raw argument.
+
+**P2 — Documentation**: New batch syntax not in `/help` output or README commands table, shipping undiscoverable.
+
+@francovp explicitly stated: "Six open findings with an unresolved P1 is not a merge decision I should make unattended."
+
+### Suggested Action
+When adding new message-sending paths, always include explicit `parse_mode: 'MarkdownV2'` with proper escaping (`smartEscapeMarkdownV2`/`markdownV2Formatter`) from day one — relying on absence of parse_mode is a latent bug. Bound each external call independently with its own timeout. Validate backward compatibility for existing input formats. Document new CLI syntax in help and README before merge.
+
+### Metadata
+- Source: github_review
+- Related Files: src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js, src/services/market/EquityMarketDataService.js, src/controllers/commands.js
+- Tags: backend, telegram, markdownv2, batch-processing, pacing, timeouts, documentation, regression
+- See Also: PR #950, GH-711
+- Pattern-Key: harden.markdownv2_consistency_and_batching
+
+---
