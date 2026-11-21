@@ -1086,3 +1086,70 @@ Review the automation readiness criteria for build-environment dependency update
 - Last-Seen: 2026-11-21
 
 ---
+
+## [LRN-20261121-214500-001] correction
+
+**Logged**: 2026-11-21T21:45:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+CodeQL alert on "Sensitive data read from GET request" for PR #1088 (opt-in WEBHOOK_API_KEY rotation) requires explicit human sign-off — cannot be dismissed by agent inference.
+
+### Details
+@francovp reviewed PR #1088 and found a CodeQL alert: "Sensitive data read from GET request — Route handler (1) for GET requests uses query parameter as sensitive data." The GET route `/news-monitor` runs through `validateApiKey`, which reads the API key from the query string (`src/lib/auth.js:30-31`). @francovp verified the alert's "GET request" framing is correct — this is not a taint-analysis artifact. The underlying surface is pre-existing and on a deprecation path (documented in AGENTS.md, sunset mechanism in auth.js with API_KEY_QUERY_SUNSET, tests in tests/security/api-key-query-deprecation.test.js). This PR does not widen the surface (query reads go down from 4 to 2, no new routes to validateApiKey). @francovp explicitly stated: "I am not going to resolve that thread. Security-scanner alerts are a human call, and this one deserves a human with the rotation context in front of them." The implementation may be fine, but rotation is precisely where "how many secrets can authenticate this endpoint" gets harder to reason about, so it deserves explicit human yes/no on the scanner.
+
+### Suggested Action
+When CodeQL flags security alerts on auth/crypto paths, do not auto-dismiss. Require explicit maintainer decision with documented rationale. Ensure deprecation paths for legacy auth patterns are tracked and the sunset timeline is enforced.
+
+### Metadata
+- Source: github_review
+- Related Files: src/routes/index.js, src/lib/auth.js, tests/security/api-key-query-deprecation.test.js
+- Tags: correction, security, codeql, auth, rotation, deprecation, human-sign-off
+- See Also: PR #1088
+- Pattern-Key: harden.security_alert_human_review
+- Recurrence-Count: 1
+- First-Seen: 2026-11-21
+- Last-Seen: 2026-11-21
+
+---
+
+## [LRN-20261121-214500-002] correction
+
+**Logged**: 2026-11-21T21:45:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+PR #950 batch /precio command has P1: missing MarkdownV2 parse_mode and escaping — latent parse-failure bug when parse_mode is added; plus 5 P2 findings on pacing, per-lookup bounds, timeframe suffixes, symbol parsing, and documentation.
+
+### Details
+@francovp reviewed PR #950 (batch symbol lookups in /precio) and found 6 open findings:
+
+**P1 - MarkdownV2 Consistency**: The new batch reply path builds its message and sends it bare without `{ parse_mode: 'MarkdownV2' }`, while every other reply in the file passes it explicitly. Currently Telegram treats it as plain text so unescaped `.`, `-`, `(`, `)` in prices and symbols don't raise a parse error. BUT the moment anyone adds `parse_mode` (the obvious "fix"), every symbol containing `.` or `-` separated pair, and the `•` bullets' surrounding text, will start failing to parse and Telegram will reject the whole message. This is the same trap as GH-711. The underlying messages are unescaped on both sides — `Precio de ${symbol} es ${price}` in fetchPriceCryptoSymbol.js has zero escaping calls.
+
+**P2 Findings**:
+1. Pacing budget — 8 RPM / 5s window means large equity batches self-throttle or drop
+2. Bound each lookup — single Binance stall shouldn't block entire batch
+3. Parenthesized timeframe suffixes (`BTCUSDT (1h)`) may not survive parseSymbolList — silent regression
+4. One-symbol requests should use parsed token, not re-derive from raw arg
+5. Documentation — new batch syntax not in `/help` or README commands table
+
+@francovp did not merge due to unresolved P1 and two P2s describing production behavior under load that cannot be validated from static read.
+
+### Suggested Action
+When adding new Telegram message paths: (1) Always use `{ parse_mode: 'MarkdownV2' }` explicitly, (2) Escape all interpolated values with smartEscapeMarkdownV2/markdownV2Formatter, (3) Implement per-item timeouts and pacing awareness for batch operations, (4) Preserve existing syntax (parenthesized timeframes), (5) Update `/help` and README for discoverability.
+
+### Metadata
+- Source: github_review
+- Related Files: src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js, src/controllers/commands.js
+- Tags: correction, telegram, markdownv2, escaping, batch, pacing, documentation, regression
+- See Also: PR #950, GH-711
+- Pattern-Key: harden.telegram_markdownv2_consistency
+- Recurrence-Count: 1
+- First-Seen: 2026-11-21
+- Last-Seen: 2026-11-21
+
+---
