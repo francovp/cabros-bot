@@ -1153,3 +1153,128 @@ When adding new Telegram message paths: (1) Always use `{ parse_mode: 'MarkdownV
 - Last-Seen: 2026-11-21
 
 ---
+
+---
+
+## [LRN-20261124-014500-001] correction
+
+**Logged**: 2026-11-24T01:45:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Virgin Trainee engagement issues #1484, #1485, #1486 closed as "bot noise" by @francovp — automated suggestions filed without actionable code suggestions.
+
+### Details
+On 2026-11-09, @francovp closed three issues that were automatically filed by the virgin-trainee-dev bot:
+- **Issue #1484**: "Unaddressed suggestion: SHIPPED: PR #1480 was squash-merged... issue..." — closed as "bot noise. Automatically filed by virgin-trainee-dev from @francovp's SHIPPED merge summary comment on PR #1480 without actionable code suggestions."
+- **Issue #1485**: "Unaddressed suggestion: Hi @francovp and @gigachad-senior-dev! This PR looks super cool..." — closed as "bot noise. Automatically filed by virgin-trainee-dev from a general greeting/praise comment on merged PR #1480 without actionable code suggestions."
+- **Issue #1486**: "Unaddressed suggestion: Hello! I'm the Virgin Trainee bot. I've noticed this updated PR..." — closed as "bot noise. Automatically filed by virgin-trainee-dev from its own introductory bot greeting comment on merged PR #1480 without actionable code suggestions."
+
+@francovp explicitly labeled these as "bot noise" and closed them, indicating the trainee's automated engagement was creating noise rather than value. The issues were filed based on merge summary comments, greeting comments, and the bot's own introductory comments — none containing actionable code suggestions.
+
+### Suggested Action
+Before filing "Unaddressed suggestion" issues, verify the source comment contains actionable technical feedback (code suggestions, design questions, architectural concerns). Avoid filing issues from merge summaries, greetings, praise, or the bot's own introductory comments. Add a filter to skip comments that are purely social or meta-commentary.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#1484, francovp/cabros-bot#1485, francovp/cabros-bot#1486
+- Tags: correction, trainee, engagement, bot-noise, automation, issue-filing
+- See Also: PR #1480
+- Pattern-Key: harden.trainee_engagement_filter
+
+---
+
+## [LRN-20261124-014500-002] correction
+
+**Logged**: 2026-11-24T01:45:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+@gigachad-senior-dev feedback on PR #1493: scope too broad for single pass, risks operational fragility on worker evaluation path.
+
+### Details
+On 2026-11-08, @francovp relayed feedback from @gigachad-senior-dev on PR #1493 (per-day outcome snapshots and trend endpoint):
+- **Concern**: "Scope is too broad for a single pass and risks operational fragility on the worker evaluation path."
+- **Resolution adopted**: Implemented cleanly decoupled in `SignalOutcomeDailyRollupService` with strict fail-safe boundaries, cursor pagination for historical sweeps, and single-flight sweep guards.
+
+The feedback highlights that large-scoped PRs touching worker evaluation paths risk introducing fragility. The resolution was to decouple concerns into a dedicated service with clear boundaries.
+
+### Suggested Action
+When implementing features affecting scheduled workers or evaluation paths, prefer small, decoupled services with explicit fail-safe boundaries over broad changes. Use cursor pagination for historical data processing and single-flight guards to prevent concurrent execution issues.
+
+### Metadata
+- Source: github_review
+- Related Files: src/services/trading/SignalOutcomeDailyRollupService.js, francovp/cabros-bot#1493
+- Tags: correction, scope, worker-evaluation, operational-fragility, decoupling
+- See Also: PR #1493
+- Pattern-Key: harden.worker_scope_decoupling
+
+---
+
+## [LRN-20261124-014500-003] correction
+
+**Logged**: 2026-11-24T01:45:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+@virgin-trainee-dev and @gigachad-senior-dev feedback on PR #1500 (distributed Firestore persistence for news-monitor pause) adopted and integrated.
+
+### Details
+On 2026-11-09, @francovp shared consolidated feedback from both reviewers on PR #1500:
+- **From @virgin-trainee-dev**: Adopted shared Firestore document persistence (`newsMonitorPause/state`), bounded in-memory TTL caching (5s default) with background refresh, and safe resume-at-next semantics (no backfill floods).
+- **From @gigachad-senior-dev**: Adopted hardening around fail-safe boundaries and test isolation.
+
+The feedback confirms the design approach of using a shared Firestore document with in-memory caching and fail-safe resume semantics for distributed pause state.
+
+### Suggested Action
+For distributed state that must survive restarts and work across replicas: use a single Firestore document as source of truth, layer with short-TTL in-memory cache for read performance, and implement fail-safe resume-at-next-tick semantics (not backfill) to avoid thundering herds.
+
+### Metadata
+- Source: github_review
+- Related Files: src/services/trading/NewsMonitorPauseService.js, francovp/cabros-bot#1500
+- Tags: correction, distributed-state, firestore, caching, fail-safe, news-monitor
+- See Also: PR #1500
+- Pattern-Key: simplify.distributed_pause_state
+
+---
+
+## [LRN-20261124-014500-004] correction
+
+**Logged**: 2026-11-24T01:45:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+@virgin-trainee-dev and @gigachad-senior-dev feedback on PR #1502 (structured audit logging) adopted and integrated.
+
+### Details
+On 2026-11-09, @francovp shared consolidated feedback from both reviewers on PR #1502:
+- **From @virgin-trainee-dev**: Adopted streamlined logical audit stream over centralized logger without adding unnecessary database sinks or external dependencies.
+- **From @gigachad-senior-dev**: Adopted fail-safe non-throwing boundaries across all audit paths, plus additional hardening on sensitive path masking, IP redaction, and outcome derivation from delivery results.
+
+Key technical decisions adopted:
+1. Logical audit stream (in-process) over centralized external logger
+2. Fail-safe non-throwing boundaries — audit failures never block primary operations
+3. Sensitive path segment masking (e.g., `/api/preferences/:channel/:chatId` → `:redacted`)
+4. Client IP redaction (IPv4 truncated, IPv6 redacted, loopback preserved)
+5. Audit outcome derived from actual delivery results (success/partial/failure)
+
+### Suggested Action
+When implementing audit logging: prefer in-process logical streams over external dependencies; make all audit paths fail-safe (non-throwing); redact sensitive data (paths, IPs) at the source; derive outcomes from actual delivery results, not assumptions.
+
+### Metadata
+- Source: github_review
+- Related Files: src/lib/auditLogger.js, src/lib/auth.js, src/services/admin/adminAuth.js, francovp/cabros-bot#1502
+- Tags: correction, audit-logging, fail-safe, redaction, privacy, structured-logging
+- See Also: PR #1502
+- Pattern-Key: harden.audit_logging_design
+
+---
+
