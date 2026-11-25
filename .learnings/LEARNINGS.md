@@ -1313,3 +1313,354 @@ When implementing audit logging: prefer in-process logical streams over external
 
 ---
 
+
+## [LRN-20261125-154500-001] correction
+
+**Logged**: 2026-11-25T15:45:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Automated Senior Dev evaluation on issue #1537 (Unaddressed suggestion: Virgin Trainee checking out PR #1503) — automation/skip with score 25/100, status/triage.
+
+### Details
+@gigachad-senior-dev[bot] provided automated evaluation on issue #1537:
+- **Priority**: priority/medium
+- **Type**: type/tech-debt
+- **Areas**: area/api, area/trading, area/observability
+- **Size**: size/xl
+- **Status**: status/triage
+- **Automation Readiness**: automation/skip (Score: 25/100)
+
+The automated evaluation indicates the scope is too large for a single automated pass.
+
+### Suggested Action
+Review the automation readiness criteria for large-scoped tech-debt issues. Consider breaking down into smaller, actionable tasks with explicit acceptance criteria.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#1537
+- Tags: correction, feedback, trainee, engagement, gigachad-senior-dev[bot], automation-skip
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-25
+- Last-Seen: 2026-11-25
+
+---
+
+## [LRN-20261125-154500-002] correction
+
+**Logged**: 2026-11-25T15:45:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Automated Senior Dev evaluation on issue #1536 (Unaddressed suggestion: Virgin Trainee on PR #1502) — automation/skip with score 25/100, status/triage.
+
+### Details
+@gigachad-senior-dev[bot] provided automated evaluation on issue #1536:
+- **Priority**: priority/high
+- **Type**: type/tech-debt
+- **Areas**: area/observability, area/api, area/trading
+- **Size**: size/l
+- **Status**: status/triage
+- **Automation Readiness**: automation/skip (Score: 25/100)
+
+The automated evaluation indicates the scope is too large for a single automated pass.
+
+### Suggested Action
+Review the automation readiness criteria for large-scoped tech-debt issues. Consider breaking down into smaller, actionable tasks with explicit acceptance criteria.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#1536
+- Tags: correction, feedback, trainee, engagement, gigachad-senior-dev[bot], automation-skip
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-25
+- Last-Seen: 2026-11-25
+
+---
+
+## [LRN-20261125-154500-003] correction
+
+**Logged**: 2026-11-25T15:45:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Automated Senior Dev evaluation on issue #1535 (Unaddressed suggestion: Virgin Trainee reviewing PR #1501) — automation/skip with score 25/100, status/triage.
+
+### Details
+@gigachad-senior-dev[bot] provided automated evaluation on issue #1535:
+- **Priority**: priority/medium
+- **Type**: type/tech-debt
+- **Areas**: area/trading, area/api, area/observability
+- **Size**: size/l
+- **Status**: status/triage
+- **Automation Readiness**: automation/skip (Score: 25/100)
+
+The automated evaluation indicates the scope is too large for a single automated pass.
+
+### Suggested Action
+Review the automation readiness criteria for large-scoped tech-debt issues. Consider breaking down into smaller, actionable tasks with explicit acceptance criteria.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#1535
+- Tags: correction, feedback, trainee, engagement, gigachad-senior-dev[bot], automation-skip
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-25
+- Last-Seen: 2026-11-25
+
+---
+
+## [LRN-20261125-154500-004] correction
+
+**Logged**: 2026-11-25T15:45:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Automated Senior Dev evaluation on issue #1534 (Unaddressed suggestion: Virgin Trainee on PR #1500) — automation/skip with score 10/100, status/triage.
+
+### Details
+@gigachad-senior-dev[bot] provided automated evaluation on issue #1534:
+- **Priority**: priority/critical
+- **Type**: type/tech-debt
+- **Areas**: area/api, area/observability, area/database
+- **Size**: size/l
+- **Status**: status/triage
+- **Automation Readiness**: automation/skip (Score: 10/100)
+
+The automated evaluation indicates the scope is too large for a single automated pass. This is the lowest automation readiness score in this batch.
+
+### Suggested Action
+Review the automation readiness criteria for critical-priority tech-debt issues. Consider breaking down into smaller, actionable tasks with explicit acceptance criteria.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#1534
+- Tags: correction, feedback, trainee, engagement, gigachad-senior-dev[bot], automation-skip, critical-priority
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-25
+- Last-Seen: 2026-11-25
+
+---
+
+## [LRN-20261125-154500-005] correction
+
+**Logged**: 2026-11-25T15:45:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Automated Senior Dev evaluation on issue #1533 (Unaddressed suggestion: Virgin Trainee checking out PR #1499) — automation/skip with score 25/100, status/triage.
+
+### Details
+@gigachad-senior-dev[bot] provided automated evaluation on issue #1533:
+- **Priority**: priority/medium
+- **Type**: type/tech-debt
+- **Areas**: area/trading, area/observability, area/whatsapp
+- **Size**: size/l
+- **Status**: status/triage
+- **Automation Readiness**: automation/skip (Score: 25/100)
+
+The automated evaluation indicates the scope is too large for a single automated pass.
+
+### Suggested Action
+Review the automation readiness criteria for large-scoped tech-debt issues. Consider breaking down into smaller, actionable tasks with explicit acceptance criteria.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#1533
+- Tags: correction, feedback, trainee, engagement, gigachad-senior-dev[bot], automation-skip
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-25
+- Last-Seen: 2026-11-25
+
+---
+
+## [LRN-20261125-154500-006] correction
+
+**Logged**: 2026-11-25T15:45:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Automated Senior Dev evaluation on issue #1532 (Unaddressed suggestion: Virgin Trainee on PR #1498) — automation/skip with score 25/100, status/triage.
+
+### Details
+@gigachad-senior-dev[bot] provided automated evaluation on issue #1532:
+- **Priority**: priority/medium
+- **Type**: type/tech-debt
+- **Areas**: area/telegram, area/whatsapp, area/trading
+- **Size**: size/l
+- **Status**: status/triage
+- **Automation Readiness**: automation/skip (Score: 25/100)
+
+The automated evaluation indicates the scope is too large for a single automated pass.
+
+### Suggested Action
+Review the automation readiness criteria for large-scoped tech-debt issues. Consider breaking down into smaller, actionable tasks with explicit acceptance criteria.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#1532
+- Tags: correction, feedback, trainee, engagement, gigachad-senior-dev[bot], automation-skip
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-25
+- Last-Seen: 2026-11-25
+
+---
+
+## [LRN-20261125-154500-007] correction
+
+**Logged**: 2026-11-25T15:45:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Automated Senior Dev evaluation on issue #1531 (Unaddressed suggestion: Virgin Trainee reviewing PR #1493) — automation/skip with score 25/100, status/triage.
+
+### Details
+@gigachad-senior-dev[bot] provided automated evaluation on issue #1531:
+- **Priority**: priority/medium
+- **Type**: type/tech-debt
+- **Areas**: area/api, area/trading
+- **Size**: size/l
+- **Status**: status/triage
+- **Automation Readiness**: automation/skip (Score: 25/100)
+
+The automated evaluation indicates the scope is too large for a single automated pass.
+
+### Suggested Action
+Review the automation readiness criteria for large-scoped tech-debt issues. Consider breaking down into smaller, actionable tasks with explicit acceptance criteria.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#1531
+- Tags: correction, feedback, trainee, engagement, gigachad-senior-dev[bot], automation-skip
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-25
+- Last-Seen: 2026-11-25
+
+---
+
+## [LRN-20261125-154500-008] correction
+
+**Logged**: 2026-11-25T15:45:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Automated Senior Dev evaluation on issue #1530 (Unaddressed suggestion: Virgin Trainee on PR #1492) — automation/skip with score 25/100, status/triage.
+
+### Details
+@gigachad-senior-dev[bot] provided automated evaluation on issue #1530:
+- **Priority**: priority/critical
+- **Type**: type/tech-debt
+- **Areas**: area/webhooks, area/observability, area/trading
+- **Size**: size/l
+- **Status**: status/triage
+- **Automation Readiness**: automation/skip (Score: 25/100)
+
+The automated evaluation indicates the scope is too large for a single automated pass.
+
+### Suggested Action
+Review the automation readiness criteria for critical-priority tech-debt issues. Consider breaking down into smaller, actionable tasks with explicit acceptance criteria.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#1530
+- Tags: correction, feedback, trainee, engagement, gigachad-senior-dev[bot], automation-skip, critical-priority
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-25
+- Last-Seen: 2026-11-25
+
+---
+
+## [LRN-20261125-154500-009] correction
+
+**Logged**: 2026-11-25T15:45:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Automated Senior Dev evaluation on issue #1529 (Unaddressed suggestion: precedence chain clarification) — automation/skip with score 20/100, status/triage.
+
+### Details
+@gigachad-senior-dev[bot] provided automated evaluation on issue #1529:
+- **Priority**: priority/medium
+- **Type**: type/tech-debt
+- **Areas**: area/api
+- **Size**: size/l
+- **Status**: status/triage
+- **Automation Readiness**: automation/skip (Score: 20/100)
+
+The automated evaluation indicates the scope is too large for a single automated pass.
+
+### Suggested Action
+Review the automation readiness criteria for tech-debt issues. Consider breaking down into smaller, actionable tasks with explicit acceptance criteria.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#1529
+- Tags: correction, feedback, trainee, engagement, gigachad-senior-dev[bot], automation-skip
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-25
+- Last-Seen: 2026-11-25
+
+---
+
+## [LRN-20261125-154500-010] correction
+
+**Logged**: 2026-11-25T15:45:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Automated Senior Dev evaluation on issue #1528 (Unaddressed suggestion: SHIPPED PR #1491) — automation/skip with score 15/100, status/triage.
+
+### Details
+@gigachad-senior-dev[bot] provided automated evaluation on issue #1528:
+- **Priority**: priority/medium
+- **Type**: type/feature
+- **Areas**: area/api, area/database, area/auth
+- **Size**: size/l
+- **Status**: status/triage
+- **Automation Readiness**: automation/skip (Score: 15/100)
+
+The automated evaluation indicates: feature/enhancement missing acceptance criteria and scope is too large for a single automated pass.
+
+### Suggested Action
+Review the automation readiness criteria for feature/enhancement issues. Ensure acceptance criteria are explicit and scope is bounded for automated processing.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#1528
+- Tags: correction, feedback, trainee, engagement, gigachad-senior-dev[bot], automation-skip, feature-enhancement
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-25
+- Last-Seen: 2026-11-25
+
+---
+
