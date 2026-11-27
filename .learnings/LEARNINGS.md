@@ -2538,3 +2538,43 @@ Review the feedback and adjust engagement strategy accordingly. If this is a tec
 - Last-Seen: 2026-11-27
 
 ---
+## [LRN-20261127T234954-617b] correction
+
+**Logged**: 2026-11-27T23:49:54.069Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+<!-- suggestion-addressed -->
+
+Reconciled against `master` (`178ff37cb`) and merged PR #1006 (`30f7fde20`, merged `2026-11-16T12:17:22Z`): this issue was auto-generated from the PR #1006 persona synth...
+
+### Details
+Correction from @francovp on Item #1515:
+
+> <!-- suggestion-addressed -->
+
+Reconciled against `master` (`178ff37cb`) and merged PR #1006 (`30f7fde20`, merged `2026-11-16T12:17:22Z`): this issue was auto-generated from the PR #1006 persona synthesis summary (`source-suggestion-id=6894197989`), and all cited behaviors are already implemented on `master`:
+
+1. **Per-channel & global snooze scope (`channels?: string[]`)**: `src/services/notification/SnoozeService.js` (`DEFAULT_CHANNELS`, `VALID_CHANNEL_NAMES`, `normalizeChannelList`, `activate`) defaults to `['telegram', 'whatsapp', 'discord']` when omitted and short-circuits requested channels in `src/services/notification/NotificationManager.js`.
+2. **Duration validation, clamping & expiry**: `src/controllers/ops/snooze.js` (`postSnooze`) validates finite `durationMs` (`INVALID_DURATION` on non-numeric/out-of-range), `SnoozeService.js` (`clampDurationMs`, `MIN_DURATION_MS = 60000`, `MAX_DURATION_MS = 21600000`, `_getSnapshot`) auto-expires on read, and `DELETE /api/ops/snooze` cancels early.
+3. **Fail-open in-memory storage & alert persistence**: `SnoozeService.js` keeps fail-open in-process state; `NotificationManager.js` returns `category: 'SNOOZED'` `SendResult` entries without blocking alert persistence.
+4. **Audit trail & status reporting**: `reason` and `actorIp` are captured in `SnoozeService.activate()` / `postSnooze()` and exposed on `GET /api/ops/snooze`; `GET /api/status` reports `dependencies.snooze` via `snoozeService.getStatus()` (`src/controllers/status.js`).
+5. **OpenAPI & Postman parity**: `src/openapi/openapi.json` (`SnoozeState`, `SnoozeActivateRequest`, `/api/ops/snooze`) and `CabrosBot.postman_collection.json` are already up to date with passing tests.
+
+Closing as already implemented and addressed in PR #1006.
+
+**Source URL**: https://github.com/francovp/cabros-bot/issues/1515#issuecomment-7228995078
+
+### Suggested Action
+Review the feedback and implement necessary changes.
+
+### Metadata
+- Source: user_feedback
+- Related Files: TBD
+- Tags: correction, feedback
+- See Also: https://github.com/francovp/cabros-bot/issues/1515#issuecomment-7228995078
+- Pattern-Key: harden.feedback_response
+
+---
