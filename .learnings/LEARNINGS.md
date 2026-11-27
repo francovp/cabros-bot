@@ -2101,3 +2101,440 @@ Review the feedback and adjust engagement strategy accordingly. If this is a tec
 - Last-Seen: 2026-11-26
 
 ---
+## [LRN-20261127-074851-78c9] correction
+
+**Logged**: 2026-11-27T07:48:51.859666+00:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Correction/negative feedback from @francovp on francovp/cabros-bot#950
+
+### Details
+@francovp inline comment on PR #950:
+
+Fixed in b1d4179: each non-user-friendly rejected batch row now reaches captureRuntimeError with command, symbol, and batch size metadata. Added a Binance-unavailable regression test.
+
+### Suggested Action
+Review the feedback and adjust engagement strategy accordingly. If this is a technical correction, update the relevant learnings or code.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#950
+- Tags: correction, feedback, trainee, engagement, francovp
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-27
+- Last-Seen: 2026-11-27
+
+---
+## [LRN-20261127-074853-85be] correction
+
+**Logged**: 2026-11-27T07:48:53.836586+00:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Correction/negative feedback from @francovp on francovp/cabros-bot#950
+
+### Details
+@francovp comment on PR #950:
+
+## Holding — six open findings, and I verified the P1's factual basis
+
+I checked the batch reply against the surrounding reply paths. The P1 is pointing at something real, though the risk is subtler than a broken message today.
+
+### The P1: the new batch reply does not use MarkdownV2
+
+The batched path builds its message and sends it bare:
+
+```js
+const results = await fetchSymbolsPrices(symbols, { parentSpan: commandSpan });
+const lines = ['Precios'];
+for (const r of results) {
+    if (r.success && r.message) {
+        lines.push(`• ${r.message}`);
+    } else {
+        lines.push(`• ${r.symbol}: ${r.error || 'no disponible'}`);
+    }
+}
+await context.reply(lines.join('\n'));
+```
+
+No `{ parse_mode: 'MarkdownV2' }`, where every other reply in this file passes it explicitly — `/outcomes` at `:416`, `/jobs`, `/precio`'s own single-symbol path, and `helpCmd` all send `{ parse_mode: 'MarkdownV2' }`, and `TelegramService` sets `parse_mode: 'MarkdownV2'` centrally at `:456`.
+
+Worth being precise about the actual failure mode, because it changes the urgency. Sent without `parse_mode`, Telegram treats the text as plain text, so the unescaped `.`, `-`, `(` and `)` in prices and symbols do **not** raise a parse error today. I confirmed the underlying messages are unescaped on both sides — `Precio de ${symbol} es ${price}` in `fetchPriceCryptoSymbol.js` has zero `smartEscapeMarkdownV2`/`markdownV2Formatter` calls, and `master` has zero as well, so that part is pre-existing rather than introduced here.
+
+So this is a consistency-and-latent-bug finding, not an outage: the moment anyone adds `parse_mode` to this call — the obvious "fix" — every symbol containing `.` or a `-` separated pair, and the `•` bullets' surrounding text, will start failing to parse and Telegram will reject the whole message. That is the same trap that `GH-711` was about, one layer over.
+
+My recommendation is to escape the interpolated `r.symbol` / `r.error` values and send with `{ parse_mode: 'MarkdownV2' }` explicitly, rather than relying on the absence of `parse_mode` to keep it safe.
+
+### The other five
+
+The P2s are the substantive part of this review and none look stale:
+
+- **Pacing budget** — with production defaults of 8 RPM and a 5-second window, a queued batch of equity lookups exceeds the provider budget, so larger batches will self-throttle or drop.
+- **Bound each lookup** — if any single Binance lookup stalls at the client's 5s timeout, `fetchSymbolsPrices` waits for the slowest rather than failing that row.
+- **Parenthesized timeframe suffixes** — the previously supported `BTCUSDT (1h)` form may not survive `parseSymbolList`, which would be a silent regression for existing users.
+- **One-symbol requests** should use the parsed token rather than re-deriving from the raw argument.
+- **Documentation** — the new batch syntax is not in `/help` output or the README commands table, so the feature would ship undiscoverable.
+
+### Why I did not merge
+
+Six open findings with an unresolved P1 is not a merge decision I should make unattended, and two of the P2s (pacing budget and per-lookup bounding) describe production behaviour under load that I cannot validate from a static read. The conflict resolution itself looked tractable if that is the blocker — nothing here is architecturally contentious.
+
+Re-reviews welcome once the P1 is addressed and the pacing/bounding questions are settled.
+
+
+### Suggested Action
+Review the feedback and adjust engagement strategy accordingly. If this is a technical correction, update the relevant learnings or code.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#950
+- Tags: correction, feedback, trainee, engagement, francovp
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-27
+- Last-Seen: 2026-11-27
+
+---
+## [LRN-20261127-074857-77d7] correction
+
+**Logged**: 2026-11-27T07:48:57.867731+00:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Correction/negative feedback from @francovp on francovp/cabros-bot#905
+
+### Details
+@francovp inline comment on PR #905:
+
+Fixed in commit 2d46be5. `_executeGoogleSearch()` now acquires a process-wide `llmConcurrencyGate` slot before contacting the provider and releases it on success/error paths, so concurrent alert grounding, news analysis, and Gemini price-fetch searches respect the same cross-surface cap as `llmCall()`. The slot is acquired after the cooldown check, mirroring `llmCall()` semantics.
+
+### Suggested Action
+Review the feedback and adjust engagement strategy accordingly. If this is a technical correction, update the relevant learnings or code.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#905
+- Tags: correction, feedback, trainee, engagement, francovp
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-27
+- Last-Seen: 2026-11-27
+
+---
+## [LRN-20261127-074857-810b] correction
+
+**Logged**: 2026-11-27T07:48:57.867865+00:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Correction/negative feedback from @francovp on francovp/cabros-bot#905
+
+### Details
+@francovp inline comment on PR #905:
+
+Fixed in commit 2d46be5. Both `llmCall()` and `_executeGoogleSearch()` now re-check `geminiQuotaManager.isCooldownActive()` immediately after `acquire()` returns, before dispatching `generateContent`. If a queued waiter observed a 429 during the wait, the new cooldown catches it: the slot is released and the typed `GEMINI_QUOTA_EXHAUSTED` error propagates so the caller fails-open.
+
+### Suggested Action
+Review the feedback and adjust engagement strategy accordingly. If this is a technical correction, update the relevant learnings or code.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#905
+- Tags: correction, feedback, trainee, engagement, francovp
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-27
+- Last-Seen: 2026-11-27
+
+---
+## [LRN-20261127-074857-1512] correction
+
+**Logged**: 2026-11-27T07:48:57.867928+00:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Correction/negative feedback from @francovp on francovp/cabros-bot#905
+
+### Details
+@francovp inline comment on PR #905:
+
+Fixed in commit 2d46be5. `acquire({ signal })` now accepts an `AbortSignal`. Queued waiters register an `abort` listener that removes the waiter from the FIFO queue and rejects with the typed `LLM_GATE_ABORTED` error carrying the original abort reason. The drain path also skips already-aborted waiters, and `getSnapshot()` exposes a new `abortedTotal` counter. New tests cover pre-aborted, mid-queue, and drain-time abort paths.
+
+### Suggested Action
+Review the feedback and adjust engagement strategy accordingly. If this is a technical correction, update the relevant learnings or code.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#905
+- Tags: correction, feedback, trainee, engagement, francovp
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-27
+- Last-Seen: 2026-11-27
+
+---
+## [LRN-20261127-074857-404b] correction
+
+**Logged**: 2026-11-27T07:48:57.867973+00:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Correction/negative feedback from @francovp on francovp/cabros-bot#905
+
+### Details
+@francovp inline comment on PR #905:
+
+Fixed in commit 1918190. Constructed a typed `LLM_GATE_ABORTED` error (`createAbortError`) attaching `signal.reason` as `error.cause` and `error.reason` rather than mutating the caller-owned `signal.reason` directly. This prevents `TypeError` on standard DOMException abort signals where `code` is a read-only getter.
+
+### Suggested Action
+Review the feedback and adjust engagement strategy accordingly. If this is a technical correction, update the relevant learnings or code.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#905
+- Tags: correction, feedback, trainee, engagement, francovp
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-27
+- Last-Seen: 2026-11-27
+
+---
+## [LRN-20261127-074857-0613] correction
+
+**Logged**: 2026-11-27T07:48:57.868027+00:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Correction/negative feedback from @francovp on francovp/cabros-bot#905
+
+### Details
+@francovp inline comment on PR #905:
+
+Fixed in commit 1918190. Added `applyRuntimeConfig()` call inside `RemoteConfigService.loadNow()` catch block and test helper resets, ensuring fallback environment/default gate configuration is restored immediately upon Remote Config refresh errors.
+
+### Suggested Action
+Review the feedback and adjust engagement strategy accordingly. If this is a technical correction, update the relevant learnings or code.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#905
+- Tags: correction, feedback, trainee, engagement, francovp
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-27
+- Last-Seen: 2026-11-27
+
+---
+## [LRN-20261127-074857-112b] correction
+
+**Logged**: 2026-11-27T07:48:57.868078+00:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Correction/negative feedback from @francovp on francovp/cabros-bot#905
+
+### Details
+@francovp inline comment on PR #905:
+
+Fixed in commit 339d7fa. Added an explicit `if (signal && signal.aborted)` pre-check at the top of `acquire()` before the free-slot acquisition branch. Callers with an already-aborted signal are rejected immediately with typed `LLM_GATE_ABORTED` error, `abortedTotal` is incremented, and no in-flight slot is taken or passed downstream to provider SDKs. Verified with unit tests covering pre-aborted caller rejection without taking capacity.
+
+### Suggested Action
+Review the feedback and adjust engagement strategy accordingly. If this is a technical correction, update the relevant learnings or code.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#905
+- Tags: correction, feedback, trainee, engagement, francovp
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-27
+- Last-Seen: 2026-11-27
+
+---
+## [LRN-20261127-074857-75ab] correction
+
+**Logged**: 2026-11-27T07:48:57.868176+00:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Correction/negative feedback from @francovp on francovp/cabros-bot#905
+
+### Details
+@francovp inline comment on PR #905:
+
+Fixed in commit 866714d. Updated `_executeGoogleSearch()` and `llmCall()` in `src/services/grounding/genaiClient.js` to invoke `geminiQuotaManager.triggerQuotaCooldown(error)` inside the catch block *before* invoking `releaseGate()`. This ensures that any queued waiters unblocked by `releaseGate()` immediately observe the active quota cooldown in their post-acquire cooldown check. Added comprehensive unit tests in `tests/unit/genaiClient.test.js` verifying the cooldown is triggered before queued callers in both `llmCall` and `_executeGoogleSearch` resume.
+
+### Suggested Action
+Review the feedback and adjust engagement strategy accordingly. If this is a technical correction, update the relevant learnings or code.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#905
+- Tags: correction, feedback, trainee, engagement, francovp
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-27
+- Last-Seen: 2026-11-27
+
+---
+## [LRN-20261127-074911-b9f7] correction
+
+**Logged**: 2026-11-27T07:49:11.279059+00:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Correction/negative feedback from @francovp on francovp/cabros-bot#1033
+
+### Details
+@francovp comment on PR #1033:
+
+## NEEDS_USER: conditional GET consistency contract
+
+The current PR computes its ETag in the patched `res.json` / `res.send` after the route handler has run. A matching `If-None-Match` can avoid sending the response body, but it cannot prevent the controller from querying Firestore first. That does not meet the acceptance criterion that the second GET avoid a Firestore read.
+
+A correct no-read path needs a shared version source or cache invalidation across instances. A process-local cache or TTL would introduce stale alert or status responses, and the issue does not define an acceptable freshness bound.
+
+Please choose:
+1. Keep conditional GET as a bandwidth optimization, relax the no-Firestore-read criterion, and have the follow-up fix the status ETag counter churn and preserve Express ETags when `ENABLE_HTTP_CONDITIONAL_GET=false`.
+2. Keep the no-read criterion and define the cache/version consistency contract, including freshness and invalidation behavior across instances, before implementation.
+
+Two additional defects need fixes whichever option is chosen:
+- `dependencies.httpCache` counters are included in `/api/status`; `etagMisses` increments after the handler creates the body, so each response changes the status ETag and matching requests never return 304.
+- `disableAppEtag` changes Express ETag behavior globally on the first wrapped request, even when `ENABLE_HTTP_CONDITIONAL_GET=false`.
+
+The PR also answers the trainee question: it hashes the serialized response body, so changed dynamic values produce a changed ETag; this happens after the handler runs and therefore does not avoid Firestore reads.
+
+
+### Suggested Action
+Review the feedback and adjust engagement strategy accordingly. If this is a technical correction, update the relevant learnings or code.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#1033
+- Tags: correction, feedback, trainee, engagement, francovp
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-27
+- Last-Seen: 2026-11-27
+
+---
+## [LRN-20261127-074957-ed7b] correction
+
+**Logged**: 2026-11-27T07:49:57.153387+00:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Correction/negative feedback from @francovp on francovp/cabros-bot#743
+
+### Details
+@francovp comment on Issue #743:
+
+[GLOBAL_BLOCKED] Linear tracker creation skipped per operator instruction because it is unavailable. This broad new SDK/workspace/package/CI surface has no CB-XX tracker ID. Smallest human action: restore Linear issue creation, then split and review the package scope before implementation. No code, package, CI, test, or PR changes were made. Issue: https://github.com/francovp/cabros-bot/issues/743 PR: N/A
+
+### Suggested Action
+Review the feedback and adjust engagement strategy accordingly. If this is a technical correction, update the relevant learnings or code.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#743
+- Tags: correction, feedback, trainee, engagement, francovp
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-27
+- Last-Seen: 2026-11-27
+
+---
+## [LRN-20261127-074957-52ff] correction
+
+**Logged**: 2026-11-27T07:49:57.153615+00:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Correction/negative feedback from @francovp on francovp/cabros-bot#743
+
+### Details
+@francovp comment on Issue #743:
+
+<!-- codex-needs-user-decision:2026-11-04:743:v1 -->
+## Decisión para destrabar la automatización
+
+Reevaluación solicitada por el dueño en la sesión de automatización: ofrecer decisiones en todos los NEEDS_USER y evitar bloqueos repetidos.
+
+**Decisión:** Adoptar retorno { data, status, idempotencyReplay } para el SDK v0.1.
+
+**Aclaración de aceptación:** idempotencyReplay deriva del header del servidor y no de una inferencia; errores tipados conservan status/código sin exponer headers secretos. fetch nativo + timeout. Paquete workspace local; sin npm publish ni credenciales nuevas.
+
+**Siguiente acción:** Escribir spec, implementar contrato y tests de auth/timeout/replay. Actualizar ejemplos del SDK y verificar paridad con OpenAPI.
+
+**Prerrequisito restante:** Ninguna decisión humana pendiente; publicación npm queda explícitamente fuera de alcance.
+
+Se retira NEEDS_USER porque la decisión queda resuelta; esto no declara el feature implementado ni el PR listo para merge.
+
+
+### Suggested Action
+Review the feedback and adjust engagement strategy accordingly. If this is a technical correction, update the relevant learnings or code.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#743
+- Tags: correction, feedback, trainee, engagement, francovp
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-27
+- Last-Seen: 2026-11-27
+
+---
+## [LRN-20261127-074959-861f] correction
+
+**Logged**: 2026-11-27T07:49:59.019414+00:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Correction/negative feedback from @francovp on francovp/cabros-bot#722
+
+### Details
+@francovp comment on Issue #722:
+
+[GLOBAL_BLOCKED] Linear tracker creation skipped per operator instruction because it is unavailable. Additionally, the proposed Remote Config set includes deployment-controlled/security-sensitive values such as SENTRY_DSN and Sentry startup/profiling controls, which the repository policy excludes from Remote Config. Smallest human action: restore Linear issue creation and revise the scope to eligible non-secret runtime settings only. No code, schema, template, or PR changes were made. Issue: https://github.com/francovp/cabros-bot/issues/722 PR: N/A
+
+### Suggested Action
+Review the feedback and adjust engagement strategy accordingly. If this is a technical correction, update the relevant learnings or code.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot#722
+- Tags: correction, feedback, trainee, engagement, francovp
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-27
+- Last-Seen: 2026-11-27
+
+---
